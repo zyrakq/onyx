@@ -732,6 +732,12 @@ fn skill_list_installed() -> Result<Vec<String>, String> {
     Ok(installed)
 }
 
+#[tauri::command]
+fn skill_read_file(skill_id: String, file_name: String) -> Result<String, String> {
+    let file_path = get_skills_dir().join(&skill_id).join(&file_name);
+    fs::read_to_string(&file_path).map_err(|e| e.to_string())
+}
+
 // Keyring commands for secure credential storage (desktop only)
 #[cfg(not(target_os = "android"))]
 mod keyring_commands {
@@ -831,6 +837,7 @@ pub fn run() {
             skill_save_file,
             skill_delete,
             skill_list_installed,
+            skill_read_file,
             get_platform_info,
         ])
         .run(tauri::generate_context!())
