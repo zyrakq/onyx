@@ -1,15 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+#[cfg(not(target_os = "android"))]
 use std::thread;
 use std::time::Duration;
 use walkdir::WalkDir;
 use parking_lot::Mutex;
+#[cfg(not(target_os = "android"))]
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter};
+#[cfg(not(target_os = "android"))]
 use keyring::Entry;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, EventKind};
 
@@ -336,182 +339,242 @@ fn run_terminal_command(command: String, cwd: Option<String>) -> Result<String, 
     Ok(format!("{}{}", stdout, stderr))
 }
 
-// PTY Session management
-struct PtySession {
-    writer: Box<dyn Write + Send>,
-    _child: Box<dyn portable_pty::Child + Send + Sync>,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-}
+// PTY Session management (desktop only)
+#[cfg(not(target_os = "android"))]
+mod pty {
+    use super::*;
+    use std::io::Write;
 
-struct PtyState {
-    sessions: std::collections::HashMap<String, PtySession>,
-    counter: u32,
-}
-
-impl Default for PtyState {
-    fn default() -> Self {
-        Self {
-            sessions: std::collections::HashMap::new(),
-            counter: 0,
-        }
-    }
-}
-
-type SharedPtyState = Arc<Mutex<PtyState>>;
-
-#[tauri::command]
-fn spawn_pty(
-    app: AppHandle,
-    state: tauri::State<'_, SharedPtyState>,
-    command: String,
-    cwd: Option<String>,
-    cols: u16,
-    rows: u16,
-) -> Result<String, String> {
-    let pty_system = native_pty_system();
-
-    let pair = pty_system
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
-
-    let mut cmd = CommandBuilder::new(&command);
-
-    if let Some(dir) = cwd {
-        cmd.cwd(dir);
+    pub struct PtySession {
+        pub writer: Box<dyn Write + Send>,
+        pub _child: Box<dyn portable_pty::Child + Send + Sync>,
+        pub master: Box<dyn portable_pty::MasterPty + Send>,
     }
 
-    // Set TERM environment variable for proper terminal emulation
-    cmd.env("TERM", "xterm-256color");
-
-    // Enhance PATH with common user binary locations
-    // This helps find binaries when running as a system-installed app
-    if let Ok(home) = std::env::var("HOME") {
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        let user_paths = [
-            format!("{}/.local/bin", home),
-            format!("{}/bin", home),
-            format!("{}/.cargo/bin", home),
-            format!("{}/.opencode/bin", home),
-            format!("{}/.nvm/versions/node/*/bin", home), // Common node location
-        ];
-        let enhanced_path = format!(
-            "{}:{}:/usr/local/bin",
-            user_paths.join(":"),
-            current_path
-        );
-        cmd.env("PATH", enhanced_path);
+    pub struct PtyState {
+        pub sessions: std::collections::HashMap<String, PtySession>,
+        pub counter: u32,
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-
-    // Generate session ID
-    let session_id = {
-        let mut state = state.lock();
-        state.counter += 1;
-        format!("pty_{}", state.counter)
-    };
-
-    let session_id_clone = session_id.clone();
-    let app_clone = app.clone();
-
-    // Spawn reader thread to emit output events
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    // EOF - process ended
-                    let _ = app_clone.emit(&format!("pty-exit-{}", session_id_clone), ());
-                    break;
-                }
-                Ok(n) => {
-                    let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let _ = app_clone.emit(&format!("pty-output-{}", session_id_clone), data);
-                }
-                Err(_) => {
-                    let _ = app_clone.emit(&format!("pty-exit-{}", session_id_clone), ());
-                    break;
-                }
+    impl Default for PtyState {
+        fn default() -> Self {
+            Self {
+                sessions: std::collections::HashMap::new(),
+                counter: 0,
             }
         }
-    });
-
-    // Store session
-    {
-        let mut state = state.lock();
-        state.sessions.insert(
-            session_id.clone(),
-            PtySession {
-                writer,
-                _child: child,
-                master: pair.master,
-            },
-        );
     }
 
-    Ok(session_id)
-}
+    pub type SharedPtyState = Arc<Mutex<PtyState>>;
 
-#[tauri::command]
-fn write_pty(
-    state: tauri::State<'_, SharedPtyState>,
-    session_id: String,
-    data: String,
-) -> Result<(), String> {
-    let mut state = state.lock();
-    if let Some(session) = state.sessions.get_mut(&session_id) {
-        session
-            .writer
-            .write_all(data.as_bytes())
-            .map_err(|e| e.to_string())?;
-        session.writer.flush().map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err("Session not found".to_string())
-    }
-}
+    #[tauri::command]
+    pub fn spawn_pty(
+        app: AppHandle,
+        state: tauri::State<'_, SharedPtyState>,
+        command: String,
+        cwd: Option<String>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<String, String> {
+        let pty_system = native_pty_system();
 
-#[tauri::command]
-fn resize_pty(
-    state: tauri::State<'_, SharedPtyState>,
-    session_id: String,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    let state = state.lock();
-    if let Some(session) = state.sessions.get(&session_id) {
-        session
-            .master
-            .resize(PtySize {
+        let pair = pty_system
+            .openpty(PtySize {
                 rows,
                 cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
             .map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err("Session not found".to_string())
+
+        let mut cmd = CommandBuilder::new(&command);
+
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
+        }
+
+        // Set TERM environment variable for proper terminal emulation
+        cmd.env("TERM", "xterm-256color");
+
+        // Enhance PATH with common user binary locations
+        // This helps find binaries when running as a system-installed app
+        if let Ok(home) = std::env::var("HOME") {
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            let user_paths = [
+                format!("{}/.local/bin", home),
+                format!("{}/bin", home),
+                format!("{}/.cargo/bin", home),
+                format!("{}/.opencode/bin", home),
+                format!("{}/.nvm/versions/node/*/bin", home), // Common node location
+            ];
+            let enhanced_path = format!(
+                "{}:{}:/usr/local/bin",
+                user_paths.join(":"),
+                current_path
+            );
+            cmd.env("PATH", enhanced_path);
+        }
+
+        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+        // Generate session ID
+        let session_id = {
+            let mut state = state.lock();
+            state.counter += 1;
+            format!("pty_{}", state.counter)
+        };
+
+        let session_id_clone = session_id.clone();
+        let app_clone = app.clone();
+
+        // Spawn reader thread to emit output events
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        // EOF - process ended
+                        let _ = app_clone.emit(&format!("pty-exit-{}", session_id_clone), ());
+                        break;
+                    }
+                    Ok(n) => {
+                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                        let _ = app_clone.emit(&format!("pty-output-{}", session_id_clone), data);
+                    }
+                    Err(_) => {
+                        let _ = app_clone.emit(&format!("pty-exit-{}", session_id_clone), ());
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Store session
+        {
+            let mut state = state.lock();
+            state.sessions.insert(
+                session_id.clone(),
+                PtySession {
+                    writer,
+                    _child: child,
+                    master: pair.master,
+                },
+            );
+        }
+
+        Ok(session_id)
+    }
+
+    #[tauri::command]
+    pub fn write_pty(
+        state: tauri::State<'_, SharedPtyState>,
+        session_id: String,
+        data: String,
+    ) -> Result<(), String> {
+        let mut state = state.lock();
+        if let Some(session) = state.sessions.get_mut(&session_id) {
+            session
+                .writer
+                .write_all(data.as_bytes())
+                .map_err(|e| e.to_string())?;
+            session.writer.flush().map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("Session not found".to_string())
+        }
+    }
+
+    #[tauri::command]
+    pub fn resize_pty(
+        state: tauri::State<'_, SharedPtyState>,
+        session_id: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), String> {
+        let state = state.lock();
+        if let Some(session) = state.sessions.get(&session_id) {
+            session
+                .master
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("Session not found".to_string())
+        }
+    }
+
+    #[tauri::command]
+    pub fn kill_pty(state: tauri::State<'_, SharedPtyState>, session_id: String) -> Result<(), String> {
+        let mut state = state.lock();
+        if state.sessions.remove(&session_id).is_some() {
+            Ok(())
+        } else {
+            Err("Session not found".to_string())
+        }
     }
 }
 
-#[tauri::command]
-fn kill_pty(state: tauri::State<'_, SharedPtyState>, session_id: String) -> Result<(), String> {
-    let mut state = state.lock();
-    if state.sessions.remove(&session_id).is_some() {
-        Ok(())
-    } else {
-        Err("Session not found".to_string())
+#[cfg(not(target_os = "android"))]
+use pty::{SharedPtyState, PtyState};
+
+// Stub PTY functions for Android
+#[cfg(target_os = "android")]
+mod pty {
+    use super::*;
+
+    pub struct PtyState;
+    impl Default for PtyState {
+        fn default() -> Self { Self }
+    }
+    pub type SharedPtyState = Arc<Mutex<PtyState>>;
+
+    #[tauri::command]
+    pub fn spawn_pty(
+        _app: AppHandle,
+        _state: tauri::State<'_, SharedPtyState>,
+        _command: String,
+        _cwd: Option<String>,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<String, String> {
+        Err("PTY not supported on Android".to_string())
+    }
+
+    #[tauri::command]
+    pub fn write_pty(
+        _state: tauri::State<'_, SharedPtyState>,
+        _session_id: String,
+        _data: String,
+    ) -> Result<(), String> {
+        Err("PTY not supported on Android".to_string())
+    }
+
+    #[tauri::command]
+    pub fn resize_pty(
+        _state: tauri::State<'_, SharedPtyState>,
+        _session_id: String,
+        _cols: u16,
+        _rows: u16,
+    ) -> Result<(), String> {
+        Err("PTY not supported on Android".to_string())
+    }
+
+    #[tauri::command]
+    pub fn kill_pty(_state: tauri::State<'_, SharedPtyState>, _session_id: String) -> Result<(), String> {
+        Err("PTY not supported on Android".to_string())
     }
 }
+
+#[cfg(target_os = "android")]
+use pty::{SharedPtyState, PtyState};
 
 // File watcher for detecting changes
 struct WatcherState {
@@ -633,32 +696,56 @@ fn skill_list_installed() -> Result<Vec<String>, String> {
     Ok(installed)
 }
 
-// Keyring commands for secure credential storage
-const KEYRING_SERVICE: &str = "com.onyx.app";
+// Keyring commands for secure credential storage (desktop only)
+#[cfg(not(target_os = "android"))]
+mod keyring_commands {
+    use super::*;
 
-#[tauri::command]
-fn keyring_set(key: String, value: String) -> Result<(), String> {
-    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
-    entry.set_password(&value).map_err(|e| e.to_string())
-}
+    const KEYRING_SERVICE: &str = "com.onyx.app";
 
-#[tauri::command]
-fn keyring_get(key: String) -> Result<Option<String>, String> {
-    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+    #[tauri::command]
+    pub fn keyring_set(key: String, value: String) -> Result<(), String> {
+        let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+        entry.set_password(&value).map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub fn keyring_get(key: String) -> Result<Option<String>, String> {
+        let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+        match entry.get_password() {
+            Ok(password) => Ok(Some(password)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    #[tauri::command]
+    pub fn keyring_delete(key: String) -> Result<(), String> {
+        let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 
-#[tauri::command]
-fn keyring_delete(key: String) -> Result<(), String> {
-    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
+// Stub keyring commands for Android
+#[cfg(target_os = "android")]
+mod keyring_commands {
+    #[tauri::command]
+    pub fn keyring_set(_key: String, _value: String) -> Result<(), String> {
+        Err("Keyring not supported on Android".to_string())
+    }
+
+    #[tauri::command]
+    pub fn keyring_get(_key: String) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    #[tauri::command]
+    pub fn keyring_delete(_key: String) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -693,15 +780,15 @@ pub fn run() {
             show_in_folder,
             search_files,
             run_terminal_command,
-            spawn_pty,
-            write_pty,
-            resize_pty,
-            kill_pty,
+            pty::spawn_pty,
+            pty::write_pty,
+            pty::resize_pty,
+            pty::kill_pty,
             load_settings,
             save_settings,
-            keyring_set,
-            keyring_get,
-            keyring_delete,
+            keyring_commands::keyring_set,
+            keyring_commands::keyring_get,
+            keyring_commands::keyring_delete,
             start_watching,
             stop_watching,
             skill_is_installed,
