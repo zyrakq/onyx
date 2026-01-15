@@ -50,9 +50,13 @@ export class SyncEngine {
   /**
    * Set the identity (keys) for this sync engine
    */
-  setIdentity(identity: NostrIdentity): void {
+  setIdentity(identity: NostrIdentity | null): void {
     this.identity = identity;
-    this.conversationKey = getConversationKey(identity.privkey, identity.pubkey);
+    if (identity) {
+      this.conversationKey = getConversationKey(identity.privkey, identity.pubkey);
+    } else {
+      this.conversationKey = null;
+    }
   }
 
   /**

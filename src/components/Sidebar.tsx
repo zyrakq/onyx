@@ -22,6 +22,7 @@ interface SidebarProps {
   bookmarks: string[];
   onToggleBookmark: (path: string) => void;
   exposeCreateNote?: (fn: () => void) => void;
+  exposeRefresh?: (fn: () => void) => void;
 }
 
 interface SearchResult {
@@ -138,6 +139,11 @@ const Sidebar: Component<SidebarProps> = (props) => {
   // Expose the create note function to parent
   if (props.exposeCreateNote) {
     props.exposeCreateNote(createNoteAtRoot);
+  }
+
+  // Expose the refresh function to parent
+  if (props.exposeRefresh) {
+    props.exposeRefresh(refreshFiles);
   }
 
   const confirmCreate = async () => {

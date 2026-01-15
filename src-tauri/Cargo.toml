@@ -26,4 +26,4 @@ tauri-plugin-fs = "2"
 walkdir = "2"
 portable-pty = "0.8"
 parking_lot = "0.12"
-keyring = "3"
+keyring = { version = "3", features = ["sync-secret-service"] }

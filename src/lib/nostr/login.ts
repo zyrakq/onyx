@@ -18,15 +18,31 @@ import type { NostrIdentity } from './types';
 
 // Keyring helper functions
 async function keyringSet(key: string, value: string): Promise<void> {
-  await invoke('keyring_set', { key, value });
+  try {
+    await invoke('keyring_set', { key, value });
+  } catch (e) {
+    console.error('Keyring set failed:', e);
+    throw e;
+  }
 }
 
 async function keyringGet(key: string): Promise<string | null> {
-  return await invoke<string | null>('keyring_get', { key });
+  try {
+    const result = await invoke<string | null>('keyring_get', { key });
+    return result;
+  } catch (e) {
+    console.error('Keyring get failed:', e);
+    throw e;
+  }
 }
 
 async function keyringDelete(key: string): Promise<void> {
-  await invoke('keyring_delete', { key });
+  try {
+    await invoke('keyring_delete', { key });
+  } catch (e) {
+    console.error('Keyring delete failed:', e);
+    throw e;
+  }
 }
 
 // NIP-46 event kind
@@ -477,20 +493,25 @@ export async function fetchUserProfile(
 }
 
 /**
- * Storage key for logins
+ * Keyring keys - all sensitive data stored securely in OS keyring
  */
-const STORAGE_KEY = 'onyx:logins';
-const PROFILE_STORAGE_KEY = 'onyx:profile';
-
-// Keyring key prefixes
-const KEYRING_NSEC_PREFIX = 'nsec:';
-const KEYRING_BUNKER_PREFIX = 'bunker:';
+const KEYRING_LOGIN_KEY = 'onyx:login';
+const KEYRING_PROFILE_KEY = 'onyx:profile';
 
 /**
- * Save login - metadata to localStorage, secrets to keyring
+ * Save login to keyring (entire login stored securely)
  */
 export async function saveLogin(login: StoredLogin): Promise<void> {
-  // Extract metadata (no secrets)
+  await keyringSet(KEYRING_LOGIN_KEY, JSON.stringify(login));
+}
+
+/**
+ * Get login metadata (async, from keyring)
+ */
+export async function getLoginMetas(): Promise<StoredLoginMeta[]> {
+  const login = await getCurrentLogin();
+  if (!login) return [];
+
   const meta: StoredLoginMeta = {
     id: login.id,
     type: login.type,
@@ -498,164 +519,87 @@ export async function saveLogin(login: StoredLogin): Promise<void> {
     createdAt: login.createdAt,
   };
 
-  // Store secrets in keyring based on login type
-  if (login.type === 'nsec' && login.nsec) {
-    await keyringSet(`${KEYRING_NSEC_PREFIX}${login.id}`, login.nsec);
-  } else if (login.type === 'bunker' && login.bunkerData) {
+  if (login.type === 'bunker' && login.bunkerData) {
     meta.bunkerPubkey = login.bunkerData.bunkerPubkey;
     meta.bunkerRelays = login.bunkerData.relays;
-    // Store secrets in keyring
-    await keyringSet(`${KEYRING_BUNKER_PREFIX}${login.id}`, JSON.stringify({
-      clientNsec: login.bunkerData.clientNsec,
-      secret: login.bunkerData.secret,
-    }));
   }
 
-  // Store metadata in localStorage
-  const metas = getLoginMetas();
-  metas.unshift(meta);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(metas));
+  return [meta];
 }
 
 /**
- * Get login metadata from localStorage (sync, no secrets)
- */
-export function getLoginMetas(): StoredLoginMeta[] {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return [];
-
-  try {
-    return JSON.parse(stored);
-  } catch (e) {
-    return [];
-  }
-}
-
-/**
- * Get all logins with secrets from keyring (async)
+ * Get all logins from keyring (async)
  */
 export async function getLogins(): Promise<StoredLogin[]> {
-  const metas = getLoginMetas();
-  const logins: StoredLogin[] = [];
-
-  for (const meta of metas) {
-    const login = await hydrateLogin(meta);
-    if (login) {
-      logins.push(login);
-    }
-  }
-
-  return logins;
+  const login = await getCurrentLogin();
+  return login ? [login] : [];
 }
 
 /**
- * Hydrate a login meta with secrets from keyring
+ * Get the current login from keyring (async)
  */
-async function hydrateLogin(meta: StoredLoginMeta): Promise<StoredLogin | null> {
-  const login: StoredLogin = {
-    id: meta.id,
-    type: meta.type,
-    pubkey: meta.pubkey,
-    createdAt: meta.createdAt,
-  };
-
+export async function getCurrentLogin(): Promise<StoredLogin | null> {
   try {
-    if (meta.type === 'nsec') {
-      const nsec = await keyringGet(`${KEYRING_NSEC_PREFIX}${meta.id}`);
-      if (nsec) {
-        login.nsec = nsec;
-      }
-    } else if (meta.type === 'bunker') {
-      const bunkerSecrets = await keyringGet(`${KEYRING_BUNKER_PREFIX}${meta.id}`);
-      if (bunkerSecrets && meta.bunkerPubkey && meta.bunkerRelays) {
-        const secrets = JSON.parse(bunkerSecrets);
-        login.bunkerData = {
-          bunkerPubkey: meta.bunkerPubkey,
-          relays: meta.bunkerRelays,
-          clientNsec: secrets.clientNsec,
-          secret: secrets.secret,
-        };
-      }
-    }
-    return login;
-  } catch (e) {
-    console.error('Failed to hydrate login:', e);
+    const stored = await keyringGet(KEYRING_LOGIN_KEY);
+    if (!stored) return null;
+    return JSON.parse(stored) as StoredLogin;
+  } catch {
     return null;
   }
 }
 
 /**
- * Get the current (first) login - sync version for metadata only
+ * Get the current login metadata - async version
+ * Note: This is now async since we store everything in keyring
  */
-export function getCurrentLoginMeta(): StoredLoginMeta | null {
-  const metas = getLoginMetas();
-  return metas[0] || null;
-}
+export async function getCurrentLoginMeta(): Promise<StoredLoginMeta | null> {
+  const login = await getCurrentLogin();
+  if (!login) return null;
 
-/**
- * Get the current (first) login with secrets (async)
- */
-export async function getCurrentLogin(): Promise<StoredLogin | null> {
-  const meta = getCurrentLoginMeta();
-  if (!meta) return null;
-  return hydrateLogin(meta);
-}
+  const meta: StoredLoginMeta = {
+    id: login.id,
+    type: login.type,
+    pubkey: login.pubkey,
+    createdAt: login.createdAt,
+  };
 
-/**
- * Remove a login by ID - removes from both localStorage and keyring
- */
-export async function removeLogin(id: string): Promise<void> {
-  const metas = getLoginMetas();
-  const meta = metas.find(m => m.id === id);
-
-  if (meta) {
-    // Remove secrets from keyring
-    if (meta.type === 'nsec') {
-      await keyringDelete(`${KEYRING_NSEC_PREFIX}${id}`);
-    } else if (meta.type === 'bunker') {
-      await keyringDelete(`${KEYRING_BUNKER_PREFIX}${id}`);
-    }
+  if (login.type === 'bunker' && login.bunkerData) {
+    meta.bunkerPubkey = login.bunkerData.bunkerPubkey;
+    meta.bunkerRelays = login.bunkerData.relays;
   }
 
-  // Remove from localStorage
-  const filtered = metas.filter(m => m.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+  return meta;
 }
 
 /**
- * Clear all logins - removes from both localStorage and keyring
+ * Remove a login by ID from keyring
+ */
+export async function removeLogin(_id: string): Promise<void> {
+  await keyringDelete(KEYRING_LOGIN_KEY);
+}
+
+/**
+ * Clear all logins from keyring
  */
 export async function clearLogins(): Promise<void> {
-  const metas = getLoginMetas();
-
-  // Remove all secrets from keyring
-  for (const meta of metas) {
-    if (meta.type === 'nsec') {
-      await keyringDelete(`${KEYRING_NSEC_PREFIX}${meta.id}`);
-    } else if (meta.type === 'bunker') {
-      await keyringDelete(`${KEYRING_BUNKER_PREFIX}${meta.id}`);
-    }
-  }
-
-  localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(PROFILE_STORAGE_KEY);
+  await keyringDelete(KEYRING_LOGIN_KEY);
+  await keyringDelete(KEYRING_PROFILE_KEY);
 }
 
 /**
- * Save user profile to localStorage
+ * Save user profile to keyring
  */
-export function saveUserProfile(profile: UserProfile): void {
-  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+export async function saveUserProfile(profile: UserProfile): Promise<void> {
+  await keyringSet(KEYRING_PROFILE_KEY, JSON.stringify(profile));
 }
 
 /**
- * Get user profile from localStorage
+ * Get user profile from keyring
  */
-export function getSavedProfile(): UserProfile | null {
-  const stored = localStorage.getItem(PROFILE_STORAGE_KEY);
-  if (!stored) return null;
-
+export async function getSavedProfile(): Promise<UserProfile | null> {
   try {
+    const stored = await keyringGet(KEYRING_PROFILE_KEY);
+    if (!stored) return null;
     return JSON.parse(stored);
   } catch (e) {
     return null;

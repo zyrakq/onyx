@@ -516,7 +516,7 @@ fn keyring_delete(key: String) -> Result<(), String> {
     let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()), // Already deleted, that's fine
+        Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
 }

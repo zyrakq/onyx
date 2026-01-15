@@ -1,4 +1,5 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
+import { invoke } from '@tauri-apps/api/core';
 import QRCode from 'qrcode';
 import {
   getSyncEngine,
@@ -36,6 +37,8 @@ type LoginTab = 'generate' | 'import' | 'connect';
 
 interface SettingsProps {
   onClose: () => void;
+  vaultPath: string | null;
+  onSyncComplete?: () => void;
 }
 
 interface SettingsSectionItem {
@@ -105,20 +108,26 @@ const Settings: Component<SettingsProps> = (props) => {
   onMount(async () => {
     // Load login from secure storage
     const login = await getCurrentLogin();
+
     if (login) {
       setCurrentLogin(login);
 
       // Get identity if it's an nsec login
       const ident = getIdentityFromLogin(login);
+
       if (ident) {
         setIdentity(ident);
         // Set identity on sync engine
         const engine = getSyncEngine();
         engine.setIdentity(ident);
+      } else if (login.type === 'nsec') {
+        // Login data is corrupted, clear it
+        await removeLogin(login.id);
+        setCurrentLogin(null);
       }
 
       // Load saved profile
-      const savedProfile = getSavedProfile();
+      const savedProfile = await getSavedProfile();
       if (savedProfile) {
         setUserProfile(savedProfile);
       }
@@ -202,7 +211,7 @@ const Settings: Component<SettingsProps> = (props) => {
       const profile = await fetchUserProfile(pubkey, relayUrls);
       if (profile) {
         setUserProfile(profile);
-        saveUserProfile(profile);
+        await saveUserProfile(profile);
       }
 
       // Fetch NIP-65 relay list
@@ -328,7 +337,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
     // Reset sync engine identity
     const engine = getSyncEngine();
-    engine.setIdentity(null as unknown as NostrIdentity);
+    engine.setIdentity(null);
 
     // Reset all local state
     setCurrentLogin(null);
@@ -459,7 +468,6 @@ const Settings: Component<SettingsProps> = (props) => {
     // 5 minutes = 300000ms
     syncIntervalId = window.setInterval(() => {
       if (identity() && syncEnabled() && syncStatus() !== 'syncing') {
-        console.log('Periodic sync triggered');
         handleSyncNow();
       }
     }, 300000);
@@ -508,9 +516,42 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   };
 
+  // Get all local markdown files recursively
+  const getLocalFiles = async (basePath: string): Promise<{ path: string; content: string }[]> => {
+    const files: { path: string; content: string }[] = [];
+
+    const entries = await invoke<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>>('list_files', { path: basePath });
+
+    const processEntries = async (entries: Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>) => {
+      for (const entry of entries) {
+        if (entry.isDirectory && entry.children) {
+          await processEntries(entry.children as typeof entries);
+        } else if (entry.name.endsWith('.md')) {
+          const content = await invoke<string>('read_file', { path: entry.path });
+          // Get relative path from vault
+          const relativePath = entry.path.replace(basePath + '/', '');
+          files.push({ path: relativePath, content });
+        }
+      }
+    };
+
+    await processEntries(entries);
+    return files;
+  };
+
   // Manual sync
   const handleSyncNow = async () => {
-    if (!identity()) return;
+    if (!identity()) {
+      setSyncStatus('error');
+      setSyncMessage('No identity found. Please log in with an nsec key.');
+      return;
+    }
+
+    if (!props.vaultPath) {
+      setSyncStatus('error');
+      setSyncMessage('No vault folder open. Open a folder first.');
+      return;
+    }
 
     setSyncStatus('syncing');
     setSyncMessage('Connecting to relays...');
@@ -521,20 +562,72 @@ const Settings: Component<SettingsProps> = (props) => {
       setSyncMessage('Fetching vaults...');
       const vaults = await engine.fetchVaults();
 
-      if (vaults.length === 0) {
+      let vault = vaults[0];
+      if (!vault) {
         setSyncMessage('No vaults found. Creating default vault...');
-        await engine.createVault('My Notes', 'Default vault');
-        setSyncStatus('success');
-        setSyncMessage('Created new vault. Sync complete!');
-      } else {
-        setSyncMessage(`Found ${vaults.length} vault(s). Fetching files...`);
-        let totalFiles = 0;
-        for (const vault of vaults) {
-          const files = await engine.fetchVaultFiles(vault);
-          totalFiles += files.length;
+        vault = await engine.createVault('My Notes', 'Default vault');
+      }
+
+      // Get local files
+      setSyncMessage('Reading local files...');
+      const localFiles = await getLocalFiles(props.vaultPath);
+
+      // Get remote files
+      setSyncMessage('Fetching remote files...');
+      const remoteFiles = await engine.fetchVaultFiles(vault);
+
+      // Create a map of remote files by path
+      const remoteFileMap = new Map(remoteFiles.map(f => [f.data.path, f]));
+
+      // Push local files that are new or changed
+      let uploadedCount = 0;
+      let downloadedCount = 0;
+
+      for (const localFile of localFiles) {
+        const remoteFile = remoteFileMap.get(localFile.path);
+
+        // Check if file needs to be uploaded (new or content changed)
+        if (!remoteFile || remoteFile.data.content !== localFile.content) {
+          setSyncMessage(`Uploading ${localFile.path}...`);
+          const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+          vault = result.vault; // Update vault with new file index
+          uploadedCount++;
         }
-        setSyncStatus('success');
-        setSyncMessage(`Synced ${vaults.length} vault(s), ${totalFiles} file(s)`);
+
+        // Remove from map so we know what's left (remote-only files)
+        remoteFileMap.delete(localFile.path);
+      }
+
+      // Download remote-only files (files on Nostr but not locally)
+      for (const [path, remoteFile] of remoteFileMap) {
+        // Skip deleted files
+        if (vault.data.deleted?.some(d => d.path === path)) {
+          continue;
+        }
+
+        setSyncMessage(`Downloading ${path}...`);
+        const fullPath = `${props.vaultPath}/${path}`;
+
+        // Ensure parent directory exists
+        const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+        if (parentDir !== props.vaultPath) {
+          await invoke('create_folder', { path: parentDir }).catch(() => {});
+        }
+
+        await invoke('write_file', { path: fullPath, content: remoteFile.data.content });
+        downloadedCount++;
+      }
+
+      setSyncStatus('success');
+      const parts = [];
+      if (uploadedCount > 0) parts.push(`uploaded ${uploadedCount}`);
+      if (downloadedCount > 0) parts.push(`downloaded ${downloadedCount}`);
+      if (parts.length === 0) parts.push('everything up to date');
+      setSyncMessage(`Sync complete: ${parts.join(', ')}`);
+
+      // Refresh file explorer if files were downloaded
+      if (downloadedCount > 0) {
+        props.onSyncComplete?.();
       }
 
       // Clear success message after 3 seconds
@@ -1101,7 +1194,7 @@ const Settings: Component<SettingsProps> = (props) => {
                     <Show when={loginTab() === 'connect'}>
                       <div class="connect-content">
                         <p class="connect-description">
-                          Scan this QR code with a Nostr signer app like <strong>Amber</strong>, <strong>Nostrudel</strong>, or <strong>nsec.app</strong> to login securely without exposing your private key.
+                          Scan this QR code with a Nostr signer app like <strong>Amber</strong> or <strong>Primal</strong> to login securely without exposing your private key.
                         </p>
 
                         <Show when={connectUri()}>

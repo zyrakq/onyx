@@ -7,6 +7,7 @@ import SearchPanel from './components/SearchPanel';
 import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import { invoke } from '@tauri-apps/api/core';
+import { getSyncEngine, getCurrentLogin, getIdentityFromLogin } from './lib/nostr';
 
 interface Tab {
   path: string;
@@ -34,6 +35,7 @@ const App: Component = () => {
   const [terminalWidth, setTerminalWidth] = createSignal(500);
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
   let createNoteFromSidebar: (() => void) | null = null;
+  let refreshSidebar: (() => void) | null = null;
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
@@ -57,6 +59,10 @@ const App: Component = () => {
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
+
+    // Initialize sync status from localStorage
+    const syncEnabled = localStorage.getItem('sync_enabled') === 'true';
+    setSyncStatus(syncEnabled ? 'idle' : 'off');
   });
 
   // Save settings when vault path changes
@@ -76,6 +82,20 @@ const App: Component = () => {
     const idx = activeTabIndex();
     return idx >= 0 ? tabs()[idx] : null;
   };
+
+  // Word and character count for status bar
+  const wordCount = () => {
+    const content = currentTab()?.content || '';
+    if (!content.trim()) return 0;
+    return content.trim().split(/\s+/).length;
+  };
+
+  const charCount = () => {
+    return (currentTab()?.content || '').length;
+  };
+
+  // Sync status for status bar
+  const [syncStatus, setSyncStatus] = createSignal<'off' | 'idle' | 'syncing' | 'error'>('off');
 
   const openFile = async (path: string) => {
     // Check if already open
@@ -224,6 +244,107 @@ const App: Component = () => {
     setSidebarView(view);
   };
 
+  // Handle sync from status bar
+  const handleStatusBarSync = async () => {
+    // Don't sync if already syncing or sync is disabled
+    if (syncStatus() === 'syncing' || syncStatus() === 'off') {
+      return;
+    }
+
+    // Check if we have a vault open
+    if (!vaultPath()) {
+      return;
+    }
+
+    // Get login and identity
+    const login = await getCurrentLogin();
+    if (!login) {
+      return;
+    }
+
+    const identity = getIdentityFromLogin(login);
+    if (!identity) {
+      return;
+    }
+
+    setSyncStatus('syncing');
+
+    try {
+      const engine = getSyncEngine();
+      engine.setIdentity(identity);
+
+      // Fetch vaults
+      const vaults = await engine.fetchVaults();
+      let vault = vaults[0];
+
+      if (!vault) {
+        vault = await engine.createVault('My Notes', 'Default vault');
+      }
+
+      // Get local files
+      const entries = await invoke<Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>>('list_files', { path: vaultPath() });
+
+      const localFiles: { path: string; content: string }[] = [];
+      const processEntries = async (entries: Array<{ name: string; path: string; isDirectory: boolean; children?: unknown[] }>) => {
+        for (const entry of entries) {
+          if (entry.isDirectory && entry.children) {
+            await processEntries(entry.children as typeof entries);
+          } else if (entry.name.endsWith('.md')) {
+            const content = await invoke<string>('read_file', { path: entry.path });
+            const relativePath = entry.path.replace(vaultPath()! + '/', '');
+            localFiles.push({ path: relativePath, content });
+          }
+        }
+      };
+      await processEntries(entries);
+
+      // Get remote files
+      const remoteFiles = await engine.fetchVaultFiles(vault);
+      const remoteFileMap = new Map(remoteFiles.map(f => [f.data.path, f]));
+
+      // Sync files
+      let downloadedCount = 0;
+
+      for (const localFile of localFiles) {
+        const remoteFile = remoteFileMap.get(localFile.path);
+        if (!remoteFile || remoteFile.data.content !== localFile.content) {
+          const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
+          vault = result.vault;
+        }
+        remoteFileMap.delete(localFile.path);
+      }
+
+      // Download remote-only files
+      for (const [path, remoteFile] of remoteFileMap) {
+        if (vault.data.deleted?.some(d => d.path === path)) continue;
+
+        const fullPath = `${vaultPath()}/${path}`;
+        const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+        if (parentDir !== vaultPath()) {
+          await invoke('create_folder', { path: parentDir }).catch(() => {});
+        }
+        await invoke('write_file', { path: fullPath, content: remoteFile.data.content });
+        downloadedCount++;
+      }
+
+      setSyncStatus('idle');
+
+      // Refresh sidebar if files were downloaded
+      if (downloadedCount > 0) {
+        refreshSidebar?.();
+      }
+    } catch (err) {
+      console.error('Sync failed:', err);
+      setSyncStatus('error');
+      // Reset to idle after 3 seconds
+      setTimeout(() => {
+        if (syncStatus() === 'error') {
+          setSyncStatus('idle');
+        }
+      }, 3000);
+    }
+  };
+
   const commands = [
     { id: 'new-file', name: 'New File', action: () => console.log('New file - use sidebar') },
     { id: 'save', name: 'Save', shortcut: 'Ctrl+S', action: saveCurrentTab },
@@ -365,6 +486,7 @@ const App: Component = () => {
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}
             exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
+            exposeRefresh={(fn) => { refreshSidebar = fn; }}
           />
         </div>
         <div
@@ -430,6 +552,58 @@ const App: Component = () => {
             </div>
           </Show>
         </div>
+
+        {/* Status Bar */}
+        <div class="status-bar">
+          <div class="status-bar-left">
+            {/* Future: git branch, etc */}
+          </div>
+          <div class="status-bar-right">
+            <Show when={currentTab()}>
+              <span class="status-item">{wordCount()} words</span>
+              <span class="status-item">{charCount()} characters</span>
+            </Show>
+            <span
+              class={`status-item sync-status ${syncStatus()} ${syncStatus() !== 'off' && syncStatus() !== 'syncing' ? 'clickable' : ''}`}
+              title={
+                syncStatus() === 'off' ? 'Sync disabled' :
+                syncStatus() === 'idle' ? 'Click to sync' :
+                syncStatus() === 'syncing' ? 'Syncing...' :
+                'Sync error - Click to retry'
+              }
+              onClick={handleStatusBarSync}
+            >
+              <Show when={syncStatus() === 'off'}>
+                {/* Cloud with slash - sync disabled */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                  <line x1="4" y1="4" x2="20" y2="20"></line>
+                </svg>
+              </Show>
+              <Show when={syncStatus() === 'idle'}>
+                {/* Cloud - sync enabled, idle */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+                </svg>
+              </Show>
+              <Show when={syncStatus() === 'syncing'}>
+                {/* Spinning refresh - syncing */}
+                <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
+                  <polyline points="21 3 21 8 16 8"></polyline>
+                </svg>
+              </Show>
+              <Show when={syncStatus() === 'error'}>
+                {/* Warning triangle - error */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </Show>
+            </span>
+          </div>
+        </div>
       </main>
 
       {/* Modals */}
@@ -463,7 +637,11 @@ const App: Component = () => {
       </Show>
 
       <Show when={showSettings()}>
-        <Settings onClose={() => setShowSettings(false)} />
+        <Settings
+          onClose={() => setShowSettings(false)}
+          vaultPath={vaultPath()}
+          onSyncComplete={() => refreshSidebar?.()}
+        />
       </Show>
     </div>
   );

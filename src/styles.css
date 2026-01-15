@@ -358,7 +358,66 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+}
+
+/* Status Bar */
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.status-bar-left,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sync-status {
+  display: flex;
+  align-items: center;
+}
+
+.sync-status.off {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.sync-status.idle {
+  color: var(--accent);
+}
+
+.sync-status.syncing {
+  color: var(--accent);
+}
+
+.sync-status.error {
+  color: var(--danger);
+}
+
+.sync-status svg.spin {
+  animation: spin 1s linear infinite;
+}
+
+.sync-status.clickable {
+  cursor: pointer;
+}
+
+.sync-status.clickable:hover {
+  opacity: 0.8;
 }
 
 /* Resize Handle */
