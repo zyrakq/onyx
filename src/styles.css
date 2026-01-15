@@ -1636,6 +1636,11 @@ body {
   color: #22c55e;
 }
 
+.skill-badge.custom {
+  background: rgba(139, 92, 246, 0.2);
+  color: #a78bfa;
+}
+
 .skill-badge.deps {
   background: rgba(245, 158, 11, 0.2);
   color: #f59e0b;

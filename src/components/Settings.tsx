@@ -65,6 +65,7 @@ interface SkillInfo {
   category: string;
   dependencies?: string[];
   files: string[];
+  isCustom?: boolean;
 }
 
 interface SkillState {
@@ -277,6 +278,34 @@ const Settings: Component<SettingsProps> = (props) => {
     }
   });
 
+  // Parse skill name from SKILL.md content (looks for name: field or first # heading)
+  const parseSkillName = (content: string, fallbackId: string): string => {
+    // First try to find a name: field
+    const nameMatch = content.match(/^name:\s*(.+)$/m);
+    if (nameMatch) {
+      return nameMatch[1].trim();
+    }
+    // Fall back to first # heading
+    const headingMatch = content.match(/^#\s+(.+)$/m);
+    return headingMatch ? headingMatch[1].trim() : fallbackId;
+  };
+
+  // Parse skill description from SKILL.md (first paragraph after title)
+  const parseSkillDescription = (content: string): string => {
+    const lines = content.split('\n');
+    let foundTitle = false;
+    for (const line of lines) {
+      if (line.startsWith('# ')) {
+        foundTitle = true;
+        continue;
+      }
+      if (foundTitle && line.trim() && !line.startsWith('#')) {
+        return line.trim().slice(0, 100) + (line.length > 100 ? '...' : '');
+      }
+    }
+    return 'Custom skill';
+  };
+
   // Load skills manifest from GitHub
   const loadSkillsManifest = async () => {
     setSkillsLoading(true);
@@ -289,14 +318,47 @@ const Settings: Component<SettingsProps> = (props) => {
         throw new Error('Failed to fetch skills manifest');
       }
       const manifest = await response.json();
-      setAvailableSkills(manifest.skills || []);
+      const manifestSkills: SkillInfo[] = manifest.skills || [];
+      const manifestSkillIds = new Set(manifestSkills.map((s: SkillInfo) => s.id));
 
       // Check which skills are installed (installed = enabled)
       const states: Record<string, SkillState> = {};
-      for (const skill of manifest.skills) {
+      for (const skill of manifestSkills) {
         const installed = await invoke<boolean>('skill_is_installed', { skillId: skill.id });
         states[skill.id] = { installed, enabled: installed, downloading: false };
       }
+
+      // Get all locally installed skills
+      const installedSkillIds = await invoke<string[]>('skill_list_installed');
+
+      // Find custom skills (installed but not in manifest)
+      const customSkills: SkillInfo[] = [];
+      for (const skillId of installedSkillIds) {
+        if (!manifestSkillIds.has(skillId)) {
+          try {
+            // Read SKILL.md to get name and description
+            const content = await invoke<string>('skill_read_file', { skillId, fileName: 'SKILL.md' });
+            const name = parseSkillName(content, skillId);
+            const description = parseSkillDescription(content);
+
+            customSkills.push({
+              id: skillId,
+              name,
+              description,
+              icon: 'file-text',
+              category: 'Custom',
+              files: ['SKILL.md'],
+              isCustom: true,
+            });
+            states[skillId] = { installed: true, enabled: true, downloading: false };
+          } catch (err) {
+            console.error(`Failed to read custom skill ${skillId}:`, err);
+          }
+        }
+      }
+
+      // Combine manifest skills with custom skills
+      setAvailableSkills([...manifestSkills, ...customSkills]);
       setSkillStates(states);
     } catch (err) {
       console.error('Failed to load skills:', err);
@@ -345,10 +407,13 @@ const Settings: Component<SettingsProps> = (props) => {
       }
     } else {
       // Disable = remove the skill (with confirmation)
+      const isCustom = skill.isCustom;
       setModalConfig({
         type: 'confirm',
         title: `Remove "${skill.name}" skill?`,
-        message: 'This will delete the skill files from your system. You can re-enable it later to download again.',
+        message: isCustom
+          ? 'This will delete the custom skill from your system. You will need to re-import it to use it again.'
+          : 'This will delete the skill files from your system. You can re-enable it later to download again.',
         onConfirm: async () => {
           try {
             await invoke('skill_delete', { skillId });
@@ -356,6 +421,10 @@ const Settings: Component<SettingsProps> = (props) => {
               ...prev,
               [skillId]: { installed: false, enabled: false, downloading: false }
             }));
+            // Remove custom skills from the list entirely
+            if (isCustom) {
+              setAvailableSkills(prev => prev.filter(s => s.id !== skillId));
+            }
           } catch (err) {
             console.error(`Failed to remove skill ${skillId}:`, err);
           }
@@ -895,12 +964,13 @@ const Settings: Component<SettingsProps> = (props) => {
           // Import single SKILL.md file
           const content = await invoke<string>('read_file', { path: selected });
           const skillId = fileName.replace('.md', '').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+          const skillName = parseSkillName(content, skillId);
           await invoke('skill_save_file', { skillId, fileName: 'SKILL.md', content });
 
           setModalConfig({
             type: 'info',
             title: 'Skill imported',
-            message: `Successfully imported skill "${skillId}". Refresh the skills list to see it.`
+            message: `Successfully imported skill "${skillName}".`
           });
         } else {
           // TODO: Handle zip import
@@ -1337,7 +1407,10 @@ const Settings: Component<SettingsProps> = (props) => {
                             <div class="skill-info">
                               <div class="skill-header">
                                 <span class="skill-name">{skill.name}</span>
-                                <Show when={state().installed}>
+                                <Show when={skill.isCustom}>
+                                  <span class="skill-badge custom">Custom</span>
+                                </Show>
+                                <Show when={state().installed && !skill.isCustom}>
                                   <span class="skill-badge installed">Installed</span>
                                 </Show>
                                 <Show when={skill.dependencies && skill.dependencies.length > 0}>
