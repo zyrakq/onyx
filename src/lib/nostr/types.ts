@@ -227,7 +227,8 @@ export const DEFAULT_SYNC_CONFIG: SyncConfig = {
   relays: [
     'wss://relay.damus.io',
     'wss://nos.lol',
-    'wss://relay.nostr.band',
+    'wss://relay.primal.net',
+    'wss://relay.ditto.pub',
   ],
   blossomServers: [
     'https://blossom.oxtr.dev',

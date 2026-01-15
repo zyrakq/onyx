@@ -33,6 +33,7 @@ import {
   type RelayEntry,
   type UserProfile,
 } from '../lib/nostr';
+import { createSignerFromLogin, type NostrSigner } from '../lib/nostr/signer';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import' | 'connect';
@@ -93,6 +94,7 @@ const Settings: Component<SettingsProps> = (props) => {
   // Login state
   const [currentLogin, setCurrentLogin] = createSignal<StoredLogin | null>(null);
   const [identity, setIdentity] = createSignal<NostrIdentity | null>(null);
+  const [signer, setSigner] = createSignal<NostrSigner | null>(null);
   const [userProfile, setUserProfile] = createSignal<UserProfile | null>(null);
   const [loginTab, setLoginTab] = createSignal<LoginTab>('connect');
   const [showPrivateKey, setShowPrivateKey] = createSignal(false);
@@ -155,14 +157,19 @@ const Settings: Component<SettingsProps> = (props) => {
     if (login) {
       setCurrentLogin(login);
 
-      // Get identity if it's an nsec login
+      // Get identity if it's an nsec login (for displaying keys)
       const ident = getIdentityFromLogin(login);
-
       if (ident) {
         setIdentity(ident);
-        // Set identity on sync engine
+      }
+
+      // Create signer for both nsec and bunker logins
+      const loginSigner = createSignerFromLogin(login);
+      if (loginSigner) {
+        setSigner(loginSigner);
+        // Set signer on sync engine
         const engine = getSyncEngine();
-        engine.setIdentity(ident);
+        await engine.setSigner(loginSigner);
       } else if (login.type === 'nsec') {
         // Login data is corrupted, clear it
         await removeLogin(login.id);
@@ -181,11 +188,17 @@ const Settings: Component<SettingsProps> = (props) => {
       try {
         const parsed = JSON.parse(savedRelays);
         // Handle both old format (string[]) and new format (RelayInfo[])
+        let relayInfos: RelayInfo[];
         if (typeof parsed[0] === 'string') {
-          setRelays(parsed.map((url: string) => ({ url, read: true, write: true })));
+          relayInfos = parsed.map((url: string) => ({ url, read: true, write: true }));
         } else {
-          setRelays(parsed);
+          relayInfos = parsed;
         }
+        setRelays(relayInfos);
+
+        // Apply saved relays to sync engine (write relays only)
+        const engine = getSyncEngine();
+        engine.setConfig({ relays: relayInfos.filter(r => r.write).map(r => r.url) });
       } catch (e) {
         console.error('Failed to load saved relays:', e);
       }
@@ -194,7 +207,12 @@ const Settings: Component<SettingsProps> = (props) => {
     const savedBlossom = localStorage.getItem('blossom_servers');
     if (savedBlossom) {
       try {
-        setBlossomServers(JSON.parse(savedBlossom));
+        const servers = JSON.parse(savedBlossom);
+        setBlossomServers(servers);
+
+        // Apply saved blossom servers to sync engine
+        const engine = getSyncEngine();
+        engine.setConfig({ blossomServers: servers });
       } catch (e) {
         console.error('Failed to load saved blossom servers:', e);
       }
@@ -217,9 +235,9 @@ const Settings: Component<SettingsProps> = (props) => {
 
     // Trigger sync on startup if enabled
     if (savedSyncEnabled === 'true' && savedSyncOnStartup !== 'false') {
-      // Delay slightly to let identity load
+      // Delay slightly to let signer initialize
       setTimeout(() => {
-        if (identity()) {
+        if (signer()) {
           handleSyncNow();
         }
       }, 500);
@@ -232,7 +250,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
     // Register the on-save sync callback
     setOnSaveSyncCallback(async () => {
-      if (identity() && syncStatus() !== 'syncing') {
+      if (signer() && syncStatus() !== 'syncing') {
         await handleSyncNow();
       }
     });
@@ -394,9 +412,16 @@ const Settings: Component<SettingsProps> = (props) => {
     setCurrentLogin(login);
     if (ident) {
       setIdentity(ident);
-      const engine = getSyncEngine();
-      engine.setIdentity(ident);
     }
+
+    // Create signer for both nsec and bunker logins
+    const loginSigner = createSignerFromLogin(login);
+    if (loginSigner) {
+      setSigner(loginSigner);
+      const engine = getSyncEngine();
+      await engine.setSigner(loginSigner);
+    }
+
     await saveLogin(login);
     setKeyError(null);
     setLoginLoading(false);
@@ -481,26 +506,35 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // Logout
   const handleLogout = async () => {
+    // Close signer connections if NIP-46
+    const currentSigner = signer();
+    if (currentSigner?.close) {
+      currentSigner.close();
+    }
+
     // Clear all login data from secure storage
     await clearLogins();
 
-    // Reset sync engine identity
+    // Reset sync engine
     const engine = getSyncEngine();
-    engine.setIdentity(null);
+    await engine.setSigner(null);
 
     // Reset all local state
     setCurrentLogin(null);
     setIdentity(null);
+    setSigner(null);
     setUserProfile(null);
     setConnectParams(null);
     setConnectUri('');
     setConnectStatus('idle');
   };
 
-  // Initialize connect params when switching to connect tab
+  // Initialize connect params and start listening when switching to connect tab
   createEffect(() => {
     if (loginTab() === 'connect' && !connectParams()) {
       initNostrConnect();
+      // Automatically start waiting for connection
+      setTimeout(() => startNostrConnect(), 100);
     }
   });
 
@@ -510,8 +544,8 @@ const Settings: Component<SettingsProps> = (props) => {
     if (uri) {
       QRCode.toString(uri, {
         type: 'svg',
-        margin: 0,
-        color: { dark: '#e0e0e0', light: '#00000000' }
+        margin: 1,
+        color: { dark: '#000000', light: '#ffffff' }
       }).then(svg => {
         setQrCodeSvg(svg);
       }).catch(err => {
@@ -616,7 +650,7 @@ const Settings: Component<SettingsProps> = (props) => {
     }
     // 5 minutes = 300000ms
     syncIntervalId = window.setInterval(() => {
-      if (identity() && syncEnabled() && syncStatus() !== 'syncing') {
+      if (signer() && syncEnabled() && syncStatus() !== 'syncing') {
         handleSyncNow();
       }
     }, 300000);
@@ -690,9 +724,9 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // Manual sync
   const handleSyncNow = async () => {
-    if (!identity()) {
+    if (!signer()) {
       setSyncStatus('error');
-      setSyncMessage('No identity found. Please log in with an nsec key.');
+      setSyncMessage('No identity found. Please log in first.');
       return;
     }
 
@@ -1214,7 +1248,7 @@ const Settings: Component<SettingsProps> = (props) => {
               <div class="settings-section">
                 <div class="settings-section-title">Sync Status</div>
 
-                <Show when={!identity()}>
+                <Show when={!signer()}>
                   <div class="settings-notice warning">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
@@ -1234,14 +1268,14 @@ const Settings: Component<SettingsProps> = (props) => {
                     <input
                       type="checkbox"
                       checked={syncEnabled()}
-                      disabled={!identity()}
+                      disabled={!signer()}
                       onChange={(e) => handleSyncToggle(e.currentTarget.checked)}
                     />
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
 
-                <Show when={syncEnabled() && identity()}>
+                <Show when={syncEnabled() && signer()}>
                   <div class="sync-status-display">
                     <div class="sync-status-indicator idle">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1467,15 +1501,11 @@ const Settings: Component<SettingsProps> = (props) => {
 
                         <Show when={connectUri()}>
                           <div class="qr-container">
-                            <Show when={connectStatus() === 'idle' || connectStatus() === 'error'}>
+                            <Show when={connectStatus() !== 'success'}>
                               <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
-                            </Show>
-                            <Show when={connectStatus() === 'waiting'}>
-                              <div class="connect-waiting">
-                                <div class="spinner"></div>
-                                <p>Waiting for connection...</p>
-                                <p class="connect-hint">Scan the QR code with your signer app</p>
-                              </div>
+                              <Show when={connectStatus() === 'waiting'}>
+                                <p class="connect-hint" style="margin-top: 12px; color: var(--text-secondary);">Scan with your signer app</p>
+                              </Show>
                             </Show>
                             <Show when={connectStatus() === 'success'}>
                               <div class="connect-success">
@@ -1493,9 +1523,6 @@ const Settings: Component<SettingsProps> = (props) => {
                         </Show>
 
                         <div class="connect-actions">
-                          <Show when={connectStatus() === 'idle'}>
-                            <button class="setting-button" onClick={startNostrConnect}>Start Connection</button>
-                          </Show>
                           <Show when={connectStatus() === 'waiting'}>
                             <button class="setting-button secondary" onClick={() => setConnectStatus('idle')}>Cancel</button>
                           </Show>

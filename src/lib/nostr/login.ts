@@ -210,6 +210,11 @@ export function buildNostrConnectUri(
   uri.searchParams.set('secret', params.secret);
   uri.searchParams.set('name', appName);
 
+  // Request permissions for signing events and encryption
+  // sign_event:30800 = file events, sign_event:30801 = vault index events
+  // nip44_encrypt and nip44_decrypt for encrypted content
+  uri.searchParams.set('perms', 'sign_event:30800,sign_event:30801,nip44_encrypt,nip44_decrypt');
+
   if (callbackUrl) {
     uri.searchParams.set('callback', callbackUrl);
   }
@@ -230,8 +235,10 @@ export async function waitForNostrConnect(
   return new Promise((resolve, reject) => {
     const relayConnections: NRelay1[] = [];
     let resolved = false;
+    let cleaningUp = false;
 
     const cleanup = () => {
+      cleaningUp = true;
       relayConnections.forEach(relay => {
         try {
           relay.close();
@@ -318,8 +325,11 @@ export async function waitForNostrConnect(
             }
           }
         }
-      } catch (e) {
-        console.error(`Failed to connect to relay ${relayUrl}:`, e);
+      } catch (e: any) {
+        // Don't log errors if we're intentionally cleaning up
+        if (!cleaningUp && e?.name !== 'AbortError') {
+          console.error(`Failed to connect to relay ${relayUrl}:`, e);
+        }
       }
     });
   });

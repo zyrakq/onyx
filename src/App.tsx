@@ -8,7 +8,8 @@ import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getSyncEngine, getCurrentLogin, getIdentityFromLogin } from './lib/nostr';
+import { getSyncEngine, getCurrentLogin } from './lib/nostr';
+import { getSignerFromStoredLogin } from './lib/nostr/signer';
 
 interface Tab {
   path: string;
@@ -310,14 +311,9 @@ const App: Component = () => {
       return;
     }
 
-    // Get login and identity
-    const login = await getCurrentLogin();
-    if (!login) {
-      return;
-    }
-
-    const identity = getIdentityFromLogin(login);
-    if (!identity) {
+    // Get signer (works for both local and bunker logins)
+    const signer = getSignerFromStoredLogin();
+    if (!signer) {
       return;
     }
 
@@ -325,7 +321,9 @@ const App: Component = () => {
 
     try {
       const engine = getSyncEngine();
-      engine.setIdentity(identity);
+
+      // Set up signer for the sync engine
+      await engine.setSigner(signer);
 
       // Fetch vaults
       const vaults = await engine.fetchVaults();
@@ -634,17 +632,16 @@ const App: Component = () => {
                   <line x1="4" y1="4" x2="20" y2="20"></line>
                 </svg>
               </Show>
-              <Show when={syncStatus() === 'idle'}>
-                {/* Cloud - sync enabled, idle */}
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <Show when={syncStatus() === 'idle' || syncStatus() === 'syncing'}>
+                {/* Cloud with sync arrows */}
+                <svg class={syncStatus() === 'syncing' ? 'cloud-syncing' : ''} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
-                </svg>
-              </Show>
-              <Show when={syncStatus() === 'syncing'}>
-                {/* Spinning refresh - syncing */}
-                <svg class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
-                  <polyline points="21 3 21 8 16 8"></polyline>
+                  <Show when={syncStatus() === 'syncing'}>
+                    <g class="sync-arrows">
+                      <path d="M12 14v3m0 0l-1.5-1.5M12 17l1.5-1.5" stroke-width="1.5"></path>
+                      <path d="M12 12V9m0 0l1.5 1.5M12 9l-1.5 1.5" stroke-width="1.5"></path>
+                    </g>
+                  </Show>
                 </svg>
               </Show>
               <Show when={syncStatus() === 'error'}>

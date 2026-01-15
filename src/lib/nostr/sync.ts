@@ -2,9 +2,10 @@
  * Sync Engine for NIP-XX Encrypted File Sync
  *
  * Handles synchronization of files between local storage and Nostr relays.
+ * Supports both local signing (nsec) and remote signing (NIP-46 bunker).
  */
 
-import { SimplePool, finalizeEvent, type Event } from 'nostr-tools';
+import { SimplePool, finalizeEvent, nip44, type Event } from 'nostr-tools';
 import { v4 as uuidv4 } from 'uuid';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import {
@@ -30,6 +31,7 @@ import {
   decryptVaultPayload,
   calculateChecksum,
 } from './crypto';
+import type { NostrSigner } from './signer';
 
 /**
  * Sync Engine class
@@ -38,6 +40,8 @@ export class SyncEngine {
   private pool: SimplePool;
   private identity: NostrIdentity | null = null;
   private conversationKey: Uint8Array | null = null;
+  private signer: NostrSigner | null = null;
+  private pubkey: string | null = null;
   private config: SyncConfig;
   private relayStatuses: Map<string, RelayStatus> = new Map();
   private subscriptions: Map<string, { close: () => void }> = new Map();
@@ -48,29 +52,65 @@ export class SyncEngine {
   }
 
   /**
-   * Set the identity (keys) for this sync engine
+   * Set the identity (keys) for this sync engine (legacy method for local signing)
    */
   setIdentity(identity: NostrIdentity | null): void {
     this.identity = identity;
     if (identity) {
       this.conversationKey = getConversationKey(identity.privkey, identity.pubkey);
+      this.pubkey = identity.pubkey;
     } else {
       this.conversationKey = null;
+      this.pubkey = null;
     }
+    // Clear signer when using identity directly
+    this.signer = null;
   }
 
   /**
-   * Check if identity is set
+   * Set a signer for signing events (supports local and NIP-46 remote signing)
+   */
+  async setSigner(signer: NostrSigner | null, conversationKey?: Uint8Array): Promise<void> {
+    this.signer = signer;
+    if (signer) {
+      this.pubkey = await signer.getPublicKey();
+      // For NIP-46, we need to get the conversation key differently
+      // The caller should provide it if available (for local signers)
+      this.conversationKey = conversationKey || null;
+    } else {
+      this.pubkey = null;
+      this.conversationKey = null;
+    }
+    // Clear legacy identity when using signer
+    this.identity = null;
+  }
+
+  /**
+   * Check if identity/signer is set
    */
   hasIdentity(): boolean {
-    return this.identity !== null;
+    return this.identity !== null || this.signer !== null;
   }
 
   /**
-   * Get the current identity
+   * Get the current identity (legacy)
    */
   getIdentity(): NostrIdentity | null {
     return this.identity;
+  }
+
+  /**
+   * Get the current signer
+   */
+  getSigner(): NostrSigner | null {
+    return this.signer;
+  }
+
+  /**
+   * Get the current pubkey (works for both identity and signer)
+   */
+  getPubkey(): string | null {
+    return this.pubkey;
   }
 
   /**
@@ -95,11 +135,63 @@ export class SyncEngine {
   }
 
   /**
-   * Ensure identity and conversation key are set
+   * Ensure identity/signer is configured
    */
   private ensureIdentity(): void {
-    if (!this.identity || !this.conversationKey) {
-      throw new Error('Identity not set. Call setIdentity() first.');
+    if (!this.pubkey) {
+      throw new Error('Identity not set. Call setIdentity() or setSigner() first.');
+    }
+  }
+
+  /**
+   * Sign an event using the configured signer or legacy identity
+   */
+  private async signEvent(unsignedEvent: {
+    kind: number;
+    created_at: number;
+    tags: string[][];
+    content: string;
+  }): Promise<Event> {
+    if (this.signer) {
+      // Use the signer (supports both local and NIP-46)
+      return await this.signer.signEvent(unsignedEvent) as Event;
+    } else if (this.identity) {
+      // Legacy: use finalizeEvent with private key
+      return finalizeEvent(unsignedEvent, hexToBytes(this.identity.privkey));
+    } else {
+      throw new Error('No signer or identity configured');
+    }
+  }
+
+  /**
+   * Encrypt content using NIP-44
+   * For NIP-46, uses remote encryption; for local, uses conversation key
+   */
+  private async encryptContent(plaintext: string): Promise<string> {
+    if (this.signer?.nip44 && this.pubkey) {
+      // Use signer's NIP-44 (works for both local and remote)
+      return await this.signer.nip44.encrypt(this.pubkey, plaintext);
+    } else if (this.conversationKey) {
+      // Legacy: use conversation key directly
+      return nip44.v2.encrypt(plaintext, this.conversationKey);
+    } else {
+      throw new Error('No encryption method available');
+    }
+  }
+
+  /**
+   * Decrypt content using NIP-44
+   * For NIP-46, uses remote decryption; for local, uses conversation key
+   */
+  private async decryptContent(ciphertext: string): Promise<string> {
+    if (this.signer?.nip44 && this.pubkey) {
+      // Use signer's NIP-44 (works for both local and remote)
+      return await this.signer.nip44.decrypt(this.pubkey, ciphertext);
+    } else if (this.conversationKey) {
+      // Legacy: use conversation key directly
+      return nip44.v2.decrypt(ciphertext, this.conversationKey);
+    } else {
+      throw new Error('No decryption method available');
     }
   }
 
@@ -113,7 +205,7 @@ export class SyncEngine {
       this.config.relays,
       {
         kinds: [KIND_VAULT_INDEX],
-        authors: [this.identity!.pubkey],
+        authors: [this.pubkey!],
       }
     );
 
@@ -121,7 +213,8 @@ export class SyncEngine {
 
     for (const event of events) {
       try {
-        const data = decryptVaultPayload(event.content, this.conversationKey!);
+        const decrypted = await this.decryptContent(event.content);
+        const data = JSON.parse(decrypted) as VaultIndexPayload;
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
 
         if (dTag) {
@@ -161,20 +254,17 @@ export class SyncEngine {
       },
     };
 
-    const encryptedContent = encryptVaultPayload(payload, this.conversationKey!);
+    const encryptedContent = await this.encryptContent(JSON.stringify(payload));
 
-    const event = finalizeEvent(
-      {
-        kind: KIND_VAULT_INDEX,
-        created_at: now,
-        tags: [
-          ['d', d],
-          ['encrypted', ENCRYPTION_METHOD],
-        ],
-        content: encryptedContent,
-      },
-      hexToBytes(this.identity!.privkey)
-    );
+    const event = await this.signEvent({
+      kind: KIND_VAULT_INDEX,
+      created_at: now,
+      tags: [
+        ['d', d],
+        ['encrypted', ENCRYPTION_METHOD],
+      ],
+      content: encryptedContent,
+    });
 
     await this.publishEvent(event);
 
@@ -193,20 +283,17 @@ export class SyncEngine {
     this.ensureIdentity();
 
     const now = Math.floor(Date.now() / 1000);
-    const encryptedContent = encryptVaultPayload(vault.data, this.conversationKey!);
+    const encryptedContent = await this.encryptContent(JSON.stringify(vault.data));
 
-    const event = finalizeEvent(
-      {
-        kind: KIND_VAULT_INDEX,
-        created_at: now,
-        tags: [
-          ['d', vault.d],
-          ['encrypted', ENCRYPTION_METHOD],
-        ],
-        content: encryptedContent,
-      },
-      hexToBytes(this.identity!.privkey)
-    );
+    const event = await this.signEvent({
+      kind: KIND_VAULT_INDEX,
+      created_at: now,
+      tags: [
+        ['d', vault.d],
+        ['encrypted', ENCRYPTION_METHOD],
+      ],
+      content: encryptedContent,
+    });
 
     await this.publishEvent(event);
 
@@ -237,7 +324,8 @@ export class SyncEngine {
 
     for (const event of events) {
       try {
-        const data = decryptFilePayload(event.content, this.conversationKey!);
+        const decrypted = await this.decryptContent(event.content);
+        const data = JSON.parse(decrypted) as FilePayload;
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
 
         if (dTag) {
@@ -282,20 +370,17 @@ export class SyncEngine {
       contentType: 'text/markdown',
     };
 
-    const encryptedContent = encryptFilePayload(payload, this.conversationKey!);
+    const encryptedContent = await this.encryptContent(JSON.stringify(payload));
 
-    const event = finalizeEvent(
-      {
-        kind: KIND_FILE,
-        created_at: now,
-        tags: [
-          ['d', d],
-          ['encrypted', ENCRYPTION_METHOD],
-        ],
-        content: encryptedContent,
-      },
-      hexToBytes(this.identity!.privkey)
-    );
+    const event = await this.signEvent({
+      kind: KIND_FILE,
+      created_at: now,
+      tags: [
+        ['d', d],
+        ['encrypted', ENCRYPTION_METHOD],
+      ],
+      content: encryptedContent,
+    });
 
     await this.publishEvent(event);
 
@@ -405,7 +490,7 @@ export class SyncEngine {
       [
         {
           kinds: [KIND_FILE, KIND_VAULT_INDEX],
-          authors: [this.identity!.pubkey],
+          authors: [this.pubkey!],
           since: Math.floor(Date.now() / 1000),
         },
       ],
