@@ -1,6 +1,6 @@
 {
   "name": "onyx",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Open source knowledge base and note-taking app",
   "type": "module",
   "scripts": {
