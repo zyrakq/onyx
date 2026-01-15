@@ -128,10 +128,13 @@ jobs:
         run: npm ci
 
       - name: Decode keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > ${{ runner.temp }}/keystore.jks
-          echo "KEYSTORE_PATH=${{ runner.temp }}/keystore.jks" >> $GITHUB_ENV
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > ${{ runner.temp }}/keystore.jks
+            echo "KEYSTORE_PATH=${{ runner.temp }}/keystore.jks" >> $GITHUB_ENV
+          fi
 
       - name: Build Android APK
         run: npx tauri android build --apk
