@@ -137,7 +137,7 @@ jobs:
           fi
 
       - name: Build Android APK
-        run: npx tauri android build --apk
+        run: npx tauri android build --apk true
         env:
           NDK_HOME: ${{ env.NDK_HOME }}
           KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
@@ -146,7 +146,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
       - name: Build Android AAB
-        run: npx tauri android build --aab
+        run: npx tauri android build --aab true
         env:
           NDK_HOME: ${{ env.NDK_HOME }}
           KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
