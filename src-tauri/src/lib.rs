@@ -386,6 +386,24 @@ fn spawn_pty(
     // Set TERM environment variable for proper terminal emulation
     cmd.env("TERM", "xterm-256color");
 
+    // Enhance PATH with common user binary locations
+    // This helps find binaries when running as a system-installed app
+    if let Ok(home) = std::env::var("HOME") {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let user_paths = [
+            format!("{}/.local/bin", home),
+            format!("{}/bin", home),
+            format!("{}/.cargo/bin", home),
+            format!("{}/.nvm/versions/node/*/bin", home), // Common node location
+        ];
+        let enhanced_path = format!(
+            "{}:{}:/usr/local/bin",
+            user_paths.join(":"),
+            current_path
+        );
+        cmd.env("PATH", enhanced_path);
+    }
+
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;

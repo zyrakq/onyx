@@ -17,7 +17,7 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from the [Releases](https://github.com/anthropics/onyx/releases) page.
+Download the latest release for your platform from the [Releases](https://github.com/derekross/onyx/releases) page.
 
 ### Build from Source
 
@@ -47,7 +47,7 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cp
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/onyx.git
+git clone https://github.com/derekross/onyx.git
 cd onyx
 
 # Install dependencies
