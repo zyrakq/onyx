@@ -1,5 +1,7 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import { open } from '@tauri-apps/plugin-shell';
 import QRCode from 'qrcode';
 import {
   getSyncEngine,
@@ -32,7 +34,7 @@ import {
   type UserProfile,
 } from '../lib/nostr';
 
-type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'sync' | 'nostr' | 'about';
+type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import' | 'connect';
 
 interface SettingsProps {
@@ -53,12 +55,33 @@ interface RelayInfo {
   write: boolean;
 }
 
+interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  dependencies?: string[];
+  files: string[];
+}
+
+interface SkillState {
+  enabled: boolean;
+  installed: boolean;
+  downloading: boolean;
+}
+
+// Skills manifest URL
+const SKILLS_MANIFEST_URL = 'https://raw.githubusercontent.com/derekross/onyx-skills/main/manifest.json';
+const SKILLS_BASE_URL = 'https://raw.githubusercontent.com/derekross/onyx-skills/main';
+
 const sections: SettingsSectionItem[] = [
   { id: 'general', label: 'General', icon: 'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5' },
   { id: 'editor', label: 'Editor', icon: 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z' },
   { id: 'files', label: 'Files & Links', icon: 'M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z M14 2v6h6 M10 12l2 2 4-4' },
   { id: 'appearance', label: 'Appearance', icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83' },
   { id: 'hotkeys', label: 'Hotkeys', icon: 'M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z' },
+  { id: 'productivity', label: 'Productivity', icon: 'M13 2L3 14h9l-1 8 10-12h-9l1-8z' },
   { id: 'sync', label: 'Sync', icon: 'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8 M21 3v5h-5' },
   { id: 'nostr', label: 'Nostr', icon: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z' },
   { id: 'about', label: 'About', icon: 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z M12 16v-4 M12 8h.01' },
@@ -104,8 +127,28 @@ const Settings: Component<SettingsProps> = (props) => {
   const [syncMessage, setSyncMessage] = createSignal<string | null>(null);
   let syncIntervalId: number | null = null;
 
+  // Skills state
+  const [availableSkills, setAvailableSkills] = createSignal<SkillInfo[]>([]);
+  const [skillStates, setSkillStates] = createSignal<Record<string, SkillState>>({});
+  const [skillsLoading, setSkillsLoading] = createSignal(true);
+  const [skillsError, setSkillsError] = createSignal<string | null>(null);
+
+  // Modal dialog state
+  const [modalConfig, setModalConfig] = createSignal<{
+    type: 'confirm' | 'info';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  } | null>(null);
+
+  // App version
+  const [appVersion, setAppVersion] = createSignal('...');
+
   // Load saved login on mount
   onMount(async () => {
+    // Get app version
+    getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+
     // Load login from secure storage
     const login = await getCurrentLogin();
 
@@ -193,6 +236,9 @@ const Settings: Component<SettingsProps> = (props) => {
         await handleSyncNow();
       }
     });
+
+    // Load skills manifest and check installed skills
+    loadSkillsManifest();
   });
 
   // Cleanup interval on unmount
@@ -201,6 +247,109 @@ const Settings: Component<SettingsProps> = (props) => {
       clearInterval(syncIntervalId);
     }
   });
+
+  // Load skills manifest from GitHub
+  const loadSkillsManifest = async () => {
+    setSkillsLoading(true);
+    setSkillsError(null);
+
+    try {
+      // Fetch manifest from GitHub
+      const response = await fetch(SKILLS_MANIFEST_URL);
+      if (!response.ok) {
+        throw new Error('Failed to fetch skills manifest');
+      }
+      const manifest = await response.json();
+      setAvailableSkills(manifest.skills || []);
+
+      // Check which skills are installed (installed = enabled)
+      const states: Record<string, SkillState> = {};
+      for (const skill of manifest.skills) {
+        const installed = await invoke<boolean>('skill_is_installed', { skillId: skill.id });
+        states[skill.id] = { installed, enabled: installed, downloading: false };
+      }
+      setSkillStates(states);
+    } catch (err) {
+      console.error('Failed to load skills:', err);
+      setSkillsError(err instanceof Error ? err.message : 'Failed to load skills');
+    } finally {
+      setSkillsLoading(false);
+    }
+  };
+
+  // Toggle skill enabled/disabled (installs or removes the skill)
+  const handleSkillToggle = async (skillId: string, enabled: boolean) => {
+    const skill = availableSkills().find(s => s.id === skillId);
+    if (!skill) return;
+
+    const currentState = skillStates()[skillId] || { installed: false, enabled: false, downloading: false };
+
+    if (enabled) {
+      // Download and install the skill
+      setSkillStates(prev => ({
+        ...prev,
+        [skillId]: { ...currentState, downloading: true }
+      }));
+
+      try {
+        // Download all skill files
+        for (const file of skill.files) {
+          const fileUrl = `${SKILLS_BASE_URL}/${skillId}/${file}`;
+          const response = await fetch(fileUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to download ${file}`);
+          }
+          const content = await response.text();
+          await invoke('skill_save_file', { skillId, fileName: file, content });
+        }
+
+        setSkillStates(prev => ({
+          ...prev,
+          [skillId]: { installed: true, enabled: true, downloading: false }
+        }));
+      } catch (err) {
+        console.error(`Failed to download skill ${skillId}:`, err);
+        setSkillStates(prev => ({
+          ...prev,
+          [skillId]: { ...currentState, downloading: false }
+        }));
+      }
+    } else {
+      // Disable = remove the skill (with confirmation)
+      setModalConfig({
+        type: 'confirm',
+        title: `Remove "${skill.name}" skill?`,
+        message: 'This will delete the skill files from your system. You can re-enable it later to download again.',
+        onConfirm: async () => {
+          try {
+            await invoke('skill_delete', { skillId });
+            setSkillStates(prev => ({
+              ...prev,
+              [skillId]: { installed: false, enabled: false, downloading: false }
+            }));
+          } catch (err) {
+            console.error(`Failed to remove skill ${skillId}:`, err);
+          }
+          setModalConfig(null);
+        }
+      });
+    }
+  };
+
+  // Get icon for skill category
+  const getSkillIcon = (icon: string) => {
+    const icons: Record<string, string> = {
+      'pencil': 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z',
+      'file-text': 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8',
+      'briefcase': 'M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16',
+      'zap': 'M13 2L3 14h9l-1 8 10-12h-9l1-8z',
+      'clipboard-list': 'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2 M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2 M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2 M12 12h4 M12 16h4 M8 12h.01 M8 16h.01',
+      'presentation': 'M2 3h20 M10 12h4 M10 16h4 M4 3v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3 M12 16v5 M8 21h8',
+      'target': 'M22 12h-4 M6 12H2 M12 6V2 M12 22v-4 M12 12m-10 0a10 10 0 1 0 20 0 10 10 0 1 0-20 0 M12 12m-6 0a6 6 0 1 0 12 0 6 6 0 1 0-12 0 M12 12m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0',
+      'table': 'M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18',
+    };
+    return icons[icon] || icons['file-text'];
+  };
 
   // Fetch user profile, relays and blossom servers after login
   const fetchUserData = async (pubkey: string) => {
@@ -941,6 +1090,125 @@ const Settings: Component<SettingsProps> = (props) => {
               </div>
             </Show>
 
+            {/* Productivity Skills */}
+            <Show when={activeSection() === 'productivity'}>
+              <div class="settings-section">
+                <div class="settings-section-title">AI Skills</div>
+
+                <div class="settings-notice">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                  </svg>
+                  <p>AI skills enhance OpenCode with specialized capabilities. Enable skills to download them to your system. Skills are stored in <code>~/.config/opencode/skills/</code></p>
+                </div>
+
+                <Show when={skillsLoading()}>
+                  <div class="skills-loading">
+                    <div class="spinner"></div>
+                    <span>Loading skills...</span>
+                  </div>
+                </Show>
+
+                <Show when={skillsError()}>
+                  <div class="settings-notice warning">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                      <line x1="12" y1="9" x2="12" y2="13"></line>
+                      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                    <p>{skillsError()}</p>
+                  </div>
+                  <button class="setting-button" onClick={loadSkillsManifest}>Retry</button>
+                </Show>
+
+                <Show when={!skillsLoading() && !skillsError()}>
+                  <div class="skills-list">
+                    <For each={availableSkills()}>
+                      {(skill) => {
+                        const state = () => skillStates()[skill.id] || { installed: false, enabled: false, downloading: false };
+                        return (
+                          <div class={`skill-item ${state().enabled ? 'enabled' : ''} ${state().downloading ? 'downloading' : ''}`}>
+                            <div class="skill-icon">
+                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d={getSkillIcon(skill.icon)}></path>
+                              </svg>
+                            </div>
+                            <div class="skill-info">
+                              <div class="skill-header">
+                                <span class="skill-name">{skill.name}</span>
+                                <Show when={state().installed}>
+                                  <span class="skill-badge installed">Installed</span>
+                                </Show>
+                                <Show when={skill.dependencies && skill.dependencies.length > 0}>
+                                  <button
+                                    class="skill-badge deps clickable"
+                                    onClick={() => setModalConfig({
+                                      type: 'info',
+                                      title: `${skill.name} Dependencies`,
+                                      message: `This skill requires the following Python packages:\n\n${skill.dependencies?.map(d => `• ${d}`).join('\n')}\n\nInstall with:\npip install ${skill.dependencies?.join(' ')}`
+                                    })}
+                                    title="Click to see dependencies"
+                                  >
+                                    Has deps
+                                  </button>
+                                </Show>
+                              </div>
+                              <p class="skill-description">{skill.description}</p>
+                              <span class="skill-category">{skill.category}</span>
+                            </div>
+                            <div class="skill-actions">
+                              <Show when={state().downloading}>
+                                <div class="spinner small"></div>
+                              </Show>
+                              <Show when={!state().downloading}>
+                                <button
+                                  class="skill-source-btn"
+                                  onClick={() => open(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
+                                  title="View source on GitHub"
+                                >
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                    <polyline points="15 3 21 3 21 9"></polyline>
+                                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                                  </svg>
+                                </button>
+                                <label class="setting-toggle">
+                                  <input
+                                    type="checkbox"
+                                    checked={state().enabled}
+                                    onChange={(e) => handleSkillToggle(skill.id, e.currentTarget.checked)}
+                                  />
+                                  <span class="toggle-slider"></span>
+                                </label>
+                              </Show>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    </For>
+                  </div>
+                </Show>
+
+                <div class="settings-section-title" style="margin-top: 24px;">Custom Skills</div>
+                <div class="setting-item">
+                  <div class="setting-info">
+                    <div class="setting-name">Import skill</div>
+                    <div class="setting-description">Upload a SKILL.md file or .zip archive</div>
+                  </div>
+                  <button class="setting-button secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                      <polyline points="17 8 12 3 7 8"></polyline>
+                      <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Upload
+                  </button>
+                </div>
+              </div>
+            </Show>
+
             {/* Sync Settings */}
             <Show when={activeSection() === 'sync'}>
               <div class="settings-section">
@@ -1395,7 +1663,7 @@ const Settings: Component<SettingsProps> = (props) => {
                   </div>
                   <h1>Onyx</h1>
                   <p class="about-tagline">A local-first, Nostr-native note-taking app</p>
-                  <p class="about-version">Version 0.1.0</p>
+                  <p class="about-version">Version {appVersion()}</p>
                 </div>
 
                 <div class="about-section">
@@ -1417,9 +1685,9 @@ const Settings: Component<SettingsProps> = (props) => {
                 <div class="about-section">
                   <h3>Links</h3>
                   <div class="about-links">
-                    <a href="#" class="about-link">GitHub Repository</a>
-                    <a href="#" class="about-link">Documentation</a>
-                    <a href="#" class="about-link">Report an Issue</a>
+                    <a href="https://github.com/derekross/onyx" target="_blank" class="about-link">GitHub Repository</a>
+                    <a href="https://github.com/derekross/onyx-skills" target="_blank" class="about-link">AI Skills Repository</a>
+                    <a href="https://github.com/derekross/onyx/issues" target="_blank" class="about-link">Report an Issue</a>
                   </div>
                 </div>
 
@@ -1431,6 +1699,35 @@ const Settings: Component<SettingsProps> = (props) => {
             </Show>
           </div>
         </div>
+
+        {/* Custom Modal Dialog */}
+        <Show when={modalConfig()}>
+          <div class="modal-overlay" onClick={() => setModalConfig(null)}>
+            <div class="modal-dialog" onClick={(e) => e.stopPropagation()}>
+              <div class="modal-header">
+                <h3>{modalConfig()!.title}</h3>
+                <button class="modal-close" onClick={() => setModalConfig(null)}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+              <div class="modal-body">
+                <p>{modalConfig()!.message}</p>
+              </div>
+              <div class="modal-footer">
+                <Show when={modalConfig()!.type === 'confirm'}>
+                  <button class="setting-button secondary" onClick={() => setModalConfig(null)}>Cancel</button>
+                  <button class="setting-button danger" onClick={modalConfig()!.onConfirm}>Remove</button>
+                </Show>
+                <Show when={modalConfig()!.type === 'info'}>
+                  <button class="setting-button" onClick={() => setModalConfig(null)}>OK</button>
+                </Show>
+              </div>
+            </div>
+          </div>
+        </Show>
       </div>
     </div>
   );

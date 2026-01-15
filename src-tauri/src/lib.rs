@@ -580,6 +580,59 @@ fn stop_watching(state: tauri::State<'_, SharedWatcherState>) -> Result<(), Stri
     Ok(())
 }
 
+// Skills directory management
+fn get_skills_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".config").join("opencode").join("skills")
+}
+
+#[tauri::command]
+fn skill_is_installed(skill_id: String) -> bool {
+    let skill_dir = get_skills_dir().join(&skill_id);
+    skill_dir.exists() && skill_dir.join("SKILL.md").exists()
+}
+
+#[tauri::command]
+fn skill_save_file(skill_id: String, file_name: String, content: String) -> Result<(), String> {
+    let skill_dir = get_skills_dir().join(&skill_id);
+    fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
+
+    let file_path = skill_dir.join(&file_name);
+    fs::write(&file_path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn skill_delete(skill_id: String) -> Result<(), String> {
+    let skill_dir = get_skills_dir().join(&skill_id);
+    if skill_dir.exists() {
+        fs::remove_dir_all(&skill_dir).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn skill_list_installed() -> Result<Vec<String>, String> {
+    let skills_dir = get_skills_dir();
+    if !skills_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut installed = Vec::new();
+    if let Ok(entries) = fs::read_dir(&skills_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().is_dir() {
+                if entry.path().join("SKILL.md").exists() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        installed.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(installed)
+}
+
 // Keyring commands for secure credential storage
 const KEYRING_SERVICE: &str = "com.onyx.app";
 
@@ -614,6 +667,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
         .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
         .setup(|app| {
@@ -650,6 +704,10 @@ pub fn run() {
             keyring_delete,
             start_watching,
             stop_watching,
+            skill_is_installed,
+            skill_save_file,
+            skill_delete,
+            skill_list_installed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
