@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::{AppHandle, Emitter};
+use keyring::Entry;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
@@ -491,6 +492,35 @@ fn kill_pty(state: tauri::State<'_, SharedPtyState>, session_id: String) -> Resu
     }
 }
 
+// Keyring commands for secure credential storage
+const KEYRING_SERVICE: &str = "com.onyx.app";
+
+#[tauri::command]
+fn keyring_set(key: String, value: String) -> Result<(), String> {
+    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+    entry.set_password(&value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn keyring_get(key: String) -> Result<Option<String>, String> {
+    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn keyring_delete(key: String) -> Result<(), String> {
+    let entry = Entry::new(KEYRING_SERVICE, &key).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()), // Already deleted, that's fine
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -526,6 +556,9 @@ pub fn run() {
             kill_pty,
             load_settings,
             save_settings,
+            keyring_set,
+            keyring_get,
+            keyring_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

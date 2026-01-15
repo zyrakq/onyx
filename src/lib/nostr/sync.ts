@@ -488,3 +488,39 @@ export function resetSyncEngine(): void {
   syncEngineInstance?.close();
   syncEngineInstance = null;
 }
+
+/**
+ * Debounced sync trigger for "on save" functionality
+ * Waits 2 seconds after last call before triggering sync
+ */
+let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let onSaveSyncCallback: (() => Promise<void>) | null = null;
+
+export function setOnSaveSyncCallback(callback: () => Promise<void>): void {
+  onSaveSyncCallback = callback;
+}
+
+export function triggerSyncOnSave(): void {
+  // Check if on-save sync is enabled
+  const syncEnabled = localStorage.getItem('sync_enabled') === 'true';
+  const syncFrequency = localStorage.getItem('sync_frequency');
+
+  if (!syncEnabled || syncFrequency !== 'onsave') {
+    return;
+  }
+
+  // Debounce: wait 2 seconds after last save before syncing
+  if (syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+  }
+
+  syncDebounceTimer = setTimeout(() => {
+    syncDebounceTimer = null;
+    if (onSaveSyncCallback) {
+      console.log('Triggering sync on save (debounced)');
+      onSaveSyncCallback().catch(err => {
+        console.error('Sync on save failed:', err);
+      });
+    }
+  }, 2000);
+}

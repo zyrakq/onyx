@@ -33,6 +33,7 @@ const App: Component = () => {
   const [showSettings, setShowSettings] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(500);
   const [sidebarWidth, setSidebarWidth] = createSignal(260);
+  let createNoteFromSidebar: (() => void) | null = null;
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | null>(null);
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
@@ -192,6 +193,12 @@ const App: Component = () => {
 
   const handleFileCreated = (path: string) => {
     openFile(path);
+  };
+
+  const createNewNote = () => {
+    if (createNoteFromSidebar) {
+      createNoteFromSidebar();
+    }
   };
 
   const handleFileDeleted = (path: string) => {
@@ -357,6 +364,7 @@ const App: Component = () => {
             view={sidebarView()}
             bookmarks={bookmarks()}
             onToggleBookmark={toggleBookmark}
+            exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
           />
         </div>
         <div
@@ -406,6 +414,8 @@ const App: Component = () => {
               content={currentTab()?.content || ''}
               onContentChange={updateTabContent}
               filePath={currentTab()?.path || null}
+              vaultPath={vaultPath()}
+              onCreateFile={createNewNote}
             />
           </div>
 

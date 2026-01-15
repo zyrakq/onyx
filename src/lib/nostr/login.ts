@@ -5,12 +5,29 @@
  * - Generate new keypair
  * - Import nsec/hex private key
  * - NIP-46 Nostr Connect (bunker)
+ *
+ * Secrets (nsec, bunker keys) are stored in the OS keyring via Tauri.
+ * Only non-sensitive metadata is stored in localStorage.
  */
 
 import { nip19, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { NRelay1 } from '@nostrify/nostrify';
+import { invoke } from '@tauri-apps/api/core';
 import type { NostrIdentity } from './types';
+
+// Keyring helper functions
+async function keyringSet(key: string, value: string): Promise<void> {
+  await invoke('keyring_set', { key, value });
+}
+
+async function keyringGet(key: string): Promise<string | null> {
+  return await invoke<string | null>('keyring_get', { key });
+}
+
+async function keyringDelete(key: string): Promise<void> {
+  await invoke('keyring_delete', { key });
+}
 
 // NIP-46 event kind
 export const KIND_NIP46_REQUEST = 24133;
@@ -23,14 +40,27 @@ export const KIND_BLOSSOM_SERVER_LIST = 10063;
 export type LoginType = 'nsec' | 'bunker' | 'extension';
 
 /**
- * Login data stored in localStorage
+ * Login metadata stored in localStorage (no secrets)
+ */
+export interface StoredLoginMeta {
+  id: string;
+  type: LoginType;
+  pubkey: string;
+  createdAt: number;
+  // For bunker logins - non-secret data only
+  bunkerPubkey?: string;
+  bunkerRelays?: string[];
+}
+
+/**
+ * Full login data (metadata + secrets from keyring)
  */
 export interface StoredLogin {
   id: string;
   type: LoginType;
   pubkey: string;
   createdAt: number;
-  // For nsec logins
+  // For nsec logins - retrieved from keyring
   nsec?: string;
   // For bunker logins
   bunkerData?: {
@@ -452,20 +482,45 @@ export async function fetchUserProfile(
 const STORAGE_KEY = 'onyx:logins';
 const PROFILE_STORAGE_KEY = 'onyx:profile';
 
+// Keyring key prefixes
+const KEYRING_NSEC_PREFIX = 'nsec:';
+const KEYRING_BUNKER_PREFIX = 'bunker:';
+
 /**
- * Save login to localStorage
+ * Save login - metadata to localStorage, secrets to keyring
  */
-export function saveLogin(login: StoredLogin): void {
-  const logins = getLogins();
-  // Add to beginning (most recent first)
-  logins.unshift(login);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(logins));
+export async function saveLogin(login: StoredLogin): Promise<void> {
+  // Extract metadata (no secrets)
+  const meta: StoredLoginMeta = {
+    id: login.id,
+    type: login.type,
+    pubkey: login.pubkey,
+    createdAt: login.createdAt,
+  };
+
+  // Store secrets in keyring based on login type
+  if (login.type === 'nsec' && login.nsec) {
+    await keyringSet(`${KEYRING_NSEC_PREFIX}${login.id}`, login.nsec);
+  } else if (login.type === 'bunker' && login.bunkerData) {
+    meta.bunkerPubkey = login.bunkerData.bunkerPubkey;
+    meta.bunkerRelays = login.bunkerData.relays;
+    // Store secrets in keyring
+    await keyringSet(`${KEYRING_BUNKER_PREFIX}${login.id}`, JSON.stringify({
+      clientNsec: login.bunkerData.clientNsec,
+      secret: login.bunkerData.secret,
+    }));
+  }
+
+  // Store metadata in localStorage
+  const metas = getLoginMetas();
+  metas.unshift(meta);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(metas));
 }
 
 /**
- * Get all logins from localStorage
+ * Get login metadata from localStorage (sync, no secrets)
  */
-export function getLogins(): StoredLogin[] {
+export function getLoginMetas(): StoredLoginMeta[] {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (!stored) return [];
 
@@ -477,25 +532,111 @@ export function getLogins(): StoredLogin[] {
 }
 
 /**
- * Get the current (first) login
+ * Get all logins with secrets from keyring (async)
  */
-export function getCurrentLogin(): StoredLogin | null {
-  const logins = getLogins();
-  return logins[0] || null;
+export async function getLogins(): Promise<StoredLogin[]> {
+  const metas = getLoginMetas();
+  const logins: StoredLogin[] = [];
+
+  for (const meta of metas) {
+    const login = await hydrateLogin(meta);
+    if (login) {
+      logins.push(login);
+    }
+  }
+
+  return logins;
 }
 
 /**
- * Remove a login by ID
+ * Hydrate a login meta with secrets from keyring
  */
-export function removeLogin(id: string): void {
-  const logins = getLogins().filter(l => l.id !== id);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(logins));
+async function hydrateLogin(meta: StoredLoginMeta): Promise<StoredLogin | null> {
+  const login: StoredLogin = {
+    id: meta.id,
+    type: meta.type,
+    pubkey: meta.pubkey,
+    createdAt: meta.createdAt,
+  };
+
+  try {
+    if (meta.type === 'nsec') {
+      const nsec = await keyringGet(`${KEYRING_NSEC_PREFIX}${meta.id}`);
+      if (nsec) {
+        login.nsec = nsec;
+      }
+    } else if (meta.type === 'bunker') {
+      const bunkerSecrets = await keyringGet(`${KEYRING_BUNKER_PREFIX}${meta.id}`);
+      if (bunkerSecrets && meta.bunkerPubkey && meta.bunkerRelays) {
+        const secrets = JSON.parse(bunkerSecrets);
+        login.bunkerData = {
+          bunkerPubkey: meta.bunkerPubkey,
+          relays: meta.bunkerRelays,
+          clientNsec: secrets.clientNsec,
+          secret: secrets.secret,
+        };
+      }
+    }
+    return login;
+  } catch (e) {
+    console.error('Failed to hydrate login:', e);
+    return null;
+  }
 }
 
 /**
- * Clear all logins
+ * Get the current (first) login - sync version for metadata only
  */
-export function clearLogins(): void {
+export function getCurrentLoginMeta(): StoredLoginMeta | null {
+  const metas = getLoginMetas();
+  return metas[0] || null;
+}
+
+/**
+ * Get the current (first) login with secrets (async)
+ */
+export async function getCurrentLogin(): Promise<StoredLogin | null> {
+  const meta = getCurrentLoginMeta();
+  if (!meta) return null;
+  return hydrateLogin(meta);
+}
+
+/**
+ * Remove a login by ID - removes from both localStorage and keyring
+ */
+export async function removeLogin(id: string): Promise<void> {
+  const metas = getLoginMetas();
+  const meta = metas.find(m => m.id === id);
+
+  if (meta) {
+    // Remove secrets from keyring
+    if (meta.type === 'nsec') {
+      await keyringDelete(`${KEYRING_NSEC_PREFIX}${id}`);
+    } else if (meta.type === 'bunker') {
+      await keyringDelete(`${KEYRING_BUNKER_PREFIX}${id}`);
+    }
+  }
+
+  // Remove from localStorage
+  const filtered = metas.filter(m => m.id !== id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+}
+
+/**
+ * Clear all logins - removes from both localStorage and keyring
+ */
+export async function clearLogins(): Promise<void> {
+  const metas = getLoginMetas();
+
+  // Remove all secrets from keyring
+  for (const meta of metas) {
+    if (meta.type === 'nsec') {
+      await keyringDelete(`${KEYRING_NSEC_PREFIX}${meta.id}`);
+    } else if (meta.type === 'bunker') {
+      await keyringDelete(`${KEYRING_BUNKER_PREFIX}${meta.id}`);
+    }
+  }
+
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(PROFILE_STORAGE_KEY);
 }

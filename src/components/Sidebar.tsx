@@ -21,6 +21,7 @@ interface SidebarProps {
   view: SidebarView;
   bookmarks: string[];
   onToggleBookmark: (path: string) => void;
+  exposeCreateNote?: (fn: () => void) => void;
 }
 
 interface SearchResult {
@@ -126,6 +127,18 @@ const Sidebar: Component<SidebarProps> = (props) => {
     setNewItemName('');
     closeContextMenu();
   };
+
+  // Create note at vault root - exposed for external use
+  const createNoteAtRoot = () => {
+    if (props.vaultPath) {
+      handleCreateFile(props.vaultPath);
+    }
+  };
+
+  // Expose the create note function to parent
+  if (props.exposeCreateNote) {
+    props.exposeCreateNote(createNoteAtRoot);
+  }
 
   const confirmCreate = async () => {
     const creating = isCreating();

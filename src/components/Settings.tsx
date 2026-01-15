@@ -1,7 +1,8 @@
 import { Component, createSignal, createEffect, For, Show, onMount, onCleanup } from 'solid-js';
-import { QRCodeSVG } from 'qrcode.react';
+import QRCode from 'qrcode';
 import {
   getSyncEngine,
+  setOnSaveSyncCallback,
   type NostrIdentity,
   type SyncConfig,
   DEFAULT_SYNC_CONFIG,
@@ -17,11 +18,14 @@ import {
   saveLogin,
   getLogins,
   getCurrentLogin,
+  getCurrentLoginMeta,
   removeLogin,
+  clearLogins,
   getIdentityFromLogin,
   saveUserProfile,
   getSavedProfile,
   type StoredLogin,
+  type StoredLoginMeta,
   type NostrConnectParams,
   type RelayEntry,
   type UserProfile,
@@ -75,6 +79,7 @@ const Settings: Component<SettingsProps> = (props) => {
   const [connectUri, setConnectUri] = createSignal<string>('');
   const [connectStatus, setConnectStatus] = createSignal<'idle' | 'waiting' | 'success' | 'error'>('idle');
   const [connectError, setConnectError] = createSignal<string | null>(null);
+  const [qrCodeSvg, setQrCodeSvg] = createSignal<string>('');
 
   // Relay state (now with read/write permissions)
   const [relays, setRelays] = createSignal<RelayInfo[]>(
@@ -90,10 +95,16 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // Sync state
   const [syncEnabled, setSyncEnabled] = createSignal(false);
+  const [syncOnStartup, setSyncOnStartup] = createSignal(true);
+  const [syncFrequency, setSyncFrequency] = createSignal<'onsave' | '5min' | 'manual'>('manual');
+  const [syncStatus, setSyncStatus] = createSignal<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [syncMessage, setSyncMessage] = createSignal<string | null>(null);
+  let syncIntervalId: number | null = null;
 
   // Load saved login on mount
-  onMount(() => {
-    const login = getCurrentLogin();
+  onMount(async () => {
+    // Load login from secure storage
+    const login = await getCurrentLogin();
     if (login) {
       setCurrentLogin(login);
 
@@ -141,6 +152,45 @@ const Settings: Component<SettingsProps> = (props) => {
     if (savedSyncEnabled) {
       setSyncEnabled(savedSyncEnabled === 'true');
     }
+
+    const savedSyncOnStartup = localStorage.getItem('sync_on_startup');
+    if (savedSyncOnStartup) {
+      setSyncOnStartup(savedSyncOnStartup === 'true');
+    }
+
+    const savedSyncFrequency = localStorage.getItem('sync_frequency');
+    if (savedSyncFrequency) {
+      setSyncFrequency(savedSyncFrequency as 'onsave' | '5min' | 'manual');
+    }
+
+    // Trigger sync on startup if enabled
+    if (savedSyncEnabled === 'true' && savedSyncOnStartup !== 'false') {
+      // Delay slightly to let identity load
+      setTimeout(() => {
+        if (identity()) {
+          handleSyncNow();
+        }
+      }, 500);
+    }
+
+    // Set up periodic sync if enabled
+    if (savedSyncEnabled === 'true' && savedSyncFrequency === '5min') {
+      startPeriodicSync();
+    }
+
+    // Register the on-save sync callback
+    setOnSaveSyncCallback(async () => {
+      if (identity() && syncStatus() !== 'syncing') {
+        await handleSyncNow();
+      }
+    });
+  });
+
+  // Cleanup interval on unmount
+  onCleanup(() => {
+    if (syncIntervalId) {
+      clearInterval(syncIntervalId);
+    }
   });
 
   // Fetch user profile, relays and blossom servers after login
@@ -182,14 +232,14 @@ const Settings: Component<SettingsProps> = (props) => {
   };
 
   // Handle successful login
-  const handleLoginSuccess = (login: StoredLogin, ident: NostrIdentity | null) => {
+  const handleLoginSuccess = async (login: StoredLogin, ident: NostrIdentity | null) => {
     setCurrentLogin(login);
     if (ident) {
       setIdentity(ident);
       const engine = getSyncEngine();
       engine.setIdentity(ident);
     }
-    saveLogin(login);
+    await saveLogin(login);
     setKeyError(null);
     setLoginLoading(false);
 
@@ -198,13 +248,13 @@ const Settings: Component<SettingsProps> = (props) => {
   };
 
   // Generate new keypair
-  const handleGenerateKey = () => {
+  const handleGenerateKey = async () => {
     setLoginLoading(true);
     setKeyError(null);
 
     try {
       const { identity: newIdentity, login } = generateNewLogin();
-      handleLoginSuccess(login, newIdentity);
+      await handleLoginSuccess(login, newIdentity);
     } catch (e) {
       setKeyError('Failed to generate key');
       setLoginLoading(false);
@@ -212,7 +262,7 @@ const Settings: Component<SettingsProps> = (props) => {
   };
 
   // Import existing key (nsec)
-  const handleImportKey = () => {
+  const handleImportKey = async () => {
     const key = importKeyInput().trim();
     if (!key) {
       setKeyError('Please enter a key');
@@ -224,7 +274,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
     try {
       const { identity: imported, login } = importNsecLogin(key);
-      handleLoginSuccess(login, imported);
+      await handleLoginSuccess(login, imported);
       setImportKeyInput('');
     } catch (e) {
       setKeyError('Invalid key format. Please enter a valid nsec or hex private key.');
@@ -258,7 +308,7 @@ const Settings: Component<SettingsProps> = (props) => {
     try {
       const login = await waitForNostrConnect(params, 120000);
       setConnectStatus('success');
-      handleLoginSuccess(login, null);
+      await handleLoginSuccess(login, null);
     } catch (e) {
       setConnectStatus('error');
       setConnectError(e instanceof Error ? e.message : 'Connection failed');
@@ -272,25 +322,43 @@ const Settings: Component<SettingsProps> = (props) => {
   };
 
   // Logout
-  const handleLogout = () => {
-    const login = currentLogin();
-    if (login) {
-      removeLogin(login.id);
-    }
+  const handleLogout = async () => {
+    // Clear all login data from secure storage
+    await clearLogins();
+
+    // Reset sync engine identity
+    const engine = getSyncEngine();
+    engine.setIdentity(null as unknown as NostrIdentity);
+
+    // Reset all local state
     setCurrentLogin(null);
     setIdentity(null);
     setUserProfile(null);
     setConnectParams(null);
     setConnectUri('');
     setConnectStatus('idle');
-    // Clear profile from storage
-    localStorage.removeItem('onyx:profile');
   };
 
   // Initialize connect params when switching to connect tab
   createEffect(() => {
     if (loginTab() === 'connect' && !connectParams()) {
       initNostrConnect();
+    }
+  });
+
+  // Generate QR code SVG when URI changes
+  createEffect(() => {
+    const uri = connectUri();
+    if (uri) {
+      QRCode.toString(uri, {
+        type: 'svg',
+        margin: 0,
+        color: { dark: '#e0e0e0', light: '#00000000' }
+      }).then(svg => {
+        setQrCodeSvg(svg);
+      }).catch(err => {
+        console.error('Failed to generate QR code:', err);
+      });
     }
   });
 
@@ -383,6 +451,28 @@ const Settings: Component<SettingsProps> = (props) => {
     engine.setConfig({ blossomServers: updated });
   };
 
+  // Start periodic sync (every 5 minutes)
+  const startPeriodicSync = () => {
+    if (syncIntervalId) {
+      clearInterval(syncIntervalId);
+    }
+    // 5 minutes = 300000ms
+    syncIntervalId = window.setInterval(() => {
+      if (identity() && syncEnabled() && syncStatus() !== 'syncing') {
+        console.log('Periodic sync triggered');
+        handleSyncNow();
+      }
+    }, 300000);
+  };
+
+  // Stop periodic sync
+  const stopPeriodicSync = () => {
+    if (syncIntervalId) {
+      clearInterval(syncIntervalId);
+      syncIntervalId = null;
+    }
+  };
+
   // Toggle sync enabled
   const handleSyncToggle = (enabled: boolean) => {
     setSyncEnabled(enabled);
@@ -390,6 +480,75 @@ const Settings: Component<SettingsProps> = (props) => {
 
     const engine = getSyncEngine();
     engine.setConfig({ enabled });
+
+    // Manage periodic sync based on enabled state
+    if (enabled && syncFrequency() === '5min') {
+      startPeriodicSync();
+    } else {
+      stopPeriodicSync();
+    }
+  };
+
+  // Toggle sync on startup
+  const handleSyncOnStartupToggle = (enabled: boolean) => {
+    setSyncOnStartup(enabled);
+    localStorage.setItem('sync_on_startup', enabled.toString());
+  };
+
+  // Change sync frequency
+  const handleSyncFrequencyChange = (frequency: 'onsave' | '5min' | 'manual') => {
+    setSyncFrequency(frequency);
+    localStorage.setItem('sync_frequency', frequency);
+
+    // Manage periodic sync based on frequency
+    if (syncEnabled() && frequency === '5min') {
+      startPeriodicSync();
+    } else {
+      stopPeriodicSync();
+    }
+  };
+
+  // Manual sync
+  const handleSyncNow = async () => {
+    if (!identity()) return;
+
+    setSyncStatus('syncing');
+    setSyncMessage('Connecting to relays...');
+
+    try {
+      const engine = getSyncEngine();
+
+      setSyncMessage('Fetching vaults...');
+      const vaults = await engine.fetchVaults();
+
+      if (vaults.length === 0) {
+        setSyncMessage('No vaults found. Creating default vault...');
+        await engine.createVault('My Notes', 'Default vault');
+        setSyncStatus('success');
+        setSyncMessage('Created new vault. Sync complete!');
+      } else {
+        setSyncMessage(`Found ${vaults.length} vault(s). Fetching files...`);
+        let totalFiles = 0;
+        for (const vault of vaults) {
+          const files = await engine.fetchVaultFiles(vault);
+          totalFiles += files.length;
+        }
+        setSyncStatus('success');
+        setSyncMessage(`Synced ${vaults.length} vault(s), ${totalFiles} file(s)`);
+      }
+
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        if (syncStatus() === 'success') {
+          setSyncStatus('idle');
+          setSyncMessage(null);
+        }
+      }, 3000);
+    } catch (err) {
+      console.error('Sync failed:', err);
+      setSyncStatus('error');
+      setSyncMessage(err instanceof Error ? err.message : 'Sync failed');
+    }
   };
 
   const handleOverlayClick = (e: MouseEvent) => {
@@ -741,39 +900,74 @@ const Settings: Component<SettingsProps> = (props) => {
                   <p>Sync is optional and disabled by default. Your notes are stored locally and can be synced using any method you prefer (Git, Dropbox, etc). Enable Nostr sync for encrypted, decentralized sync across devices.</p>
                 </div>
 
-                <div class="settings-section-title">Sync Options</div>
-                <div class="setting-item">
-                  <div class="setting-info">
-                    <div class="setting-name">Sync on startup</div>
-                    <div class="setting-description">Automatically sync when opening the vault</div>
-                  </div>
-                  <label class="setting-toggle">
-                    <input type="checkbox" checked disabled={!syncEnabled()} />
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-
-                <div class="setting-item">
-                  <div class="setting-info">
-                    <div class="setting-name">Sync frequency</div>
-                    <div class="setting-description">How often to sync changes</div>
-                  </div>
-                  <select class="setting-select" disabled={!syncEnabled()}>
-                    <option value="realtime">Real-time</option>
-                    <option value="5min">Every 5 minutes</option>
-                    <option value="manual">Manual only</option>
-                  </select>
-                </div>
-
                 <Show when={syncEnabled()}>
+                  <div class="settings-section-title">Sync Options</div>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Sync on startup</div>
+                      <div class="setting-description">Automatically sync when opening the app</div>
+                    </div>
+                    <label class="setting-toggle">
+                      <input
+                        type="checkbox"
+                        checked={syncOnStartup()}
+                        onChange={(e) => handleSyncOnStartupToggle(e.currentTarget.checked)}
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Sync frequency</div>
+                      <div class="setting-description">How often to sync changes automatically</div>
+                    </div>
+                    <select
+                      class="setting-select"
+                      value={syncFrequency()}
+                      onChange={(e) => handleSyncFrequencyChange(e.currentTarget.value as 'onsave' | '5min' | 'manual')}
+                    >
+                      <option value="onsave">On file save</option>
+                      <option value="5min">Every 5 minutes</option>
+                      <option value="manual">Manual only</option>
+                    </select>
+                  </div>
+
                   <div class="settings-section-title">Actions</div>
                   <div class="setting-item">
                     <div class="setting-info">
                       <div class="setting-name">Manual sync</div>
                       <div class="setting-description">Sync all files now</div>
                     </div>
-                    <button class="setting-button">Sync Now</button>
+                    <button
+                      class="setting-button"
+                      onClick={handleSyncNow}
+                      disabled={syncStatus() === 'syncing'}
+                    >
+                      {syncStatus() === 'syncing' ? 'Syncing...' : 'Sync Now'}
+                    </button>
                   </div>
+
+                  <Show when={syncMessage()}>
+                    <div class={`sync-feedback ${syncStatus()}`}>
+                      <Show when={syncStatus() === 'syncing'}>
+                        <div class="spinner small"></div>
+                      </Show>
+                      <Show when={syncStatus() === 'success'}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      </Show>
+                      <Show when={syncStatus() === 'error'}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <circle cx="12" cy="12" r="10"></circle>
+                          <line x1="15" y1="9" x2="9" y2="15"></line>
+                          <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                      </Show>
+                      <span>{syncMessage()}</span>
+                    </div>
+                  </Show>
                 </Show>
               </div>
             </Show>
@@ -913,14 +1107,7 @@ const Settings: Component<SettingsProps> = (props) => {
                         <Show when={connectUri()}>
                           <div class="qr-container">
                             <Show when={connectStatus() === 'idle' || connectStatus() === 'error'}>
-                              <QRCodeSVG
-                                value={connectUri()}
-                                size={200}
-                                level="M"
-                                includeMargin={false}
-                                bgColor="transparent"
-                                fgColor="#e0e0e0"
-                              />
+                              <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
                             </Show>
                             <Show when={connectStatus() === 'waiting'}>
                               <div class="connect-waiting">
@@ -1120,7 +1307,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
                 <div class="about-section">
                   <h3>About</h3>
-                  <p>Onyx is an open-source alternative to Obsidian, built with privacy and decentralization in mind. Your notes are stored locally as plain markdown files, with optional encrypted sync via Nostr.</p>
+                  <p>Onyx is an open-source note-taking app built with privacy and decentralization in mind. Your notes are stored locally as plain markdown files, with optional encrypted sync via Nostr.</p>
                 </div>
 
                 <div class="about-section">
