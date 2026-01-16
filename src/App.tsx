@@ -8,11 +8,12 @@ import OpenCodeTerminal from './components/OpenCodeTerminal';
 import Settings from './components/Settings';
 import GraphView from './components/GraphView';
 import OutlinePanel from './components/OutlinePanel';
+import BacklinksPanel from './components/BacklinksPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
-import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry } from './lib/editor/note-index';
+import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { HeadingInfo } from './lib/editor/heading-plugin';
 
 interface Tab {
@@ -46,7 +47,19 @@ const App: Component = () => {
   let setSearchQuery: ((query: string) => void) | null = null;
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
-  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | null>(null);
+  const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | null>(null);
+
+  // Backlinks panel state
+  const [showBacklinks, setShowBacklinks] = createSignal(
+    localStorage.getItem('show_backlinks') === 'true'
+  );
+  const [backlinksWidth, setBacklinksWidth] = createSignal(
+    parseInt(localStorage.getItem('backlinks_width') || '250')
+  );
+
+  // Note graph and file contents for backlinks
+  const [noteGraph, setNoteGraph] = createSignal<NoteGraph | null>(null);
+  const [fileContents, setFileContents] = createSignal<Map<string, string>>(new Map());
 
   // Outline panel state
   const [showOutline, setShowOutline] = createSignal(
@@ -207,6 +220,42 @@ const App: Component = () => {
     localStorage.setItem('outline_width', outlineWidth().toString());
   });
 
+  // Persist backlinks panel state
+  createEffect(() => {
+    localStorage.setItem('show_backlinks', showBacklinks().toString());
+  });
+  createEffect(() => {
+    localStorage.setItem('backlinks_width', backlinksWidth().toString());
+  });
+
+  // Build note graph and cache file contents for backlinks
+  createEffect(async () => {
+    const index = noteIndex();
+    const vault = vaultPath();
+    if (!index || !vault) {
+      setNoteGraph(null);
+      setFileContents(new Map());
+      return;
+    }
+
+    try {
+      const contents = new Map<string, string>();
+
+      // Read all files and cache contents
+      const readFile = async (path: string) => {
+        const content = await invoke<string>('read_file', { path });
+        contents.set(path, content);
+        return content;
+      };
+
+      const graph = await buildNoteGraph(vault, index, readFile);
+      setNoteGraph(graph);
+      setFileContents(contents);
+    } catch (err) {
+      console.error('Failed to build note graph:', err);
+    }
+  });
+
   // Clear headings when switching tabs
   createEffect(() => {
     activeTabIndex(); // Dependency
@@ -249,7 +298,9 @@ const App: Component = () => {
     try {
       const content = await invoke<string>('read_file', { path });
       // Strip .md extension for display name
-      const name = (path.split('/').pop() || 'Untitled').replace(/\.md$/i, '');
+      // Handle both Unix (/) and Windows (\) path separators
+      const parts = path.split(/[/\\]/);
+      const name = (parts[parts.length - 1] || 'Untitled').replace(/\.md$/i, '');
 
       setTabs([...tabs(), { path, name, content, isDirty: false }]);
       setActiveTabIndex(tabs().length); // Will be the new last index after state updates
@@ -364,6 +415,9 @@ const App: Component = () => {
       } else if (isMod && e.shiftKey && e.key === 'O') {
         e.preventDefault();
         setShowOutline(!showOutline());
+      } else if (isMod && e.shiftKey && e.key === 'B') {
+        e.preventDefault();
+        setShowBacklinks(!showBacklinks());
       } else if (e.key === 'Escape') {
         setShowQuickSwitcher(false);
         setShowCommandPalette(false);
@@ -579,6 +633,7 @@ const App: Component = () => {
     { id: 'search', name: 'Search in Files', shortcut: 'Ctrl+Shift+F', action: () => setShowSearch(true) },
     { id: 'toggle-terminal', name: 'Toggle Terminal', shortcut: 'Ctrl+`', action: () => setShowTerminal(!showTerminal()) },
     { id: 'toggle-outline', name: 'Toggle Outline', shortcut: 'Ctrl+Shift+O', action: () => setShowOutline(!showOutline()) },
+    { id: 'toggle-backlinks', name: 'Toggle Backlinks', shortcut: 'Ctrl+Shift+B', action: () => setShowBacklinks(!showBacklinks()) },
     { id: 'close-tab', name: 'Close Tab', action: () => activeTabIndex() >= 0 && closeTab(activeTabIndex()) },
   ];
 
@@ -610,6 +665,15 @@ const App: Component = () => {
     document.body.style.userSelect = 'none';
   };
 
+  const handleBacklinksResizeStart = (e: MouseEvent) => {
+    e.preventDefault();
+    setIsResizing('backlinks');
+    setResizeStartX(e.clientX);
+    setResizeStartWidth(backlinksWidth());
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   const handleResizeMove = (e: MouseEvent) => {
     const target = isResizing();
     if (!target) return;
@@ -629,6 +693,11 @@ const App: Component = () => {
       const delta = resizeStartX() - e.clientX;
       const newWidth = resizeStartWidth() + delta;
       setOutlineWidth(Math.max(180, Math.min(400, newWidth)));
+    } else if (target === 'backlinks') {
+      // Backlinks: dragging left = wider panel (same as terminal)
+      const delta = resizeStartX() - e.clientX;
+      const newWidth = resizeStartWidth() + delta;
+      setBacklinksWidth(Math.max(180, Math.min(400, newWidth)));
     }
   };
 
@@ -708,6 +777,17 @@ const App: Component = () => {
             <line x1="3" y1="6" x2="3.01" y2="6"></line>
             <line x1="3" y1="12" x2="3.01" y2="12"></line>
             <line x1="3" y1="18" x2="3.01" y2="18"></line>
+          </svg>
+        </button>
+        <button
+          class={`icon-btn ${showBacklinks() ? 'active' : ''}`}
+          onClick={() => setShowBacklinks(!showBacklinks())}
+          title="Backlinks (Ctrl+Shift+B)"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 17H7A5 5 0 0 1 7 7h2"></path>
+            <path d="M15 7h2a5 5 0 1 1 0 10h-2"></path>
+            <line x1="8" y1="12" x2="16" y2="12"></line>
           </svg>
         </button>
         <div class="icon-bar-spacer"></div>
@@ -868,6 +948,24 @@ const App: Component = () => {
                   setTimeout(() => setScrollToHeadingId(null), 100);
                 }}
                 onClose={() => setShowOutline(false)}
+              />
+            </div>
+          </Show>
+
+          {/* Backlinks Panel - Right Side */}
+          <Show when={showBacklinks() && currentTab()}>
+            <div
+              class="resize-handle"
+              onMouseDown={handleBacklinksResizeStart}
+            />
+            <div class="backlinks-panel-container" style={{ width: `${backlinksWidth()}px` }}>
+              <BacklinksPanel
+                currentFilePath={currentTab()?.path || null}
+                currentFileName={currentTab()?.name || null}
+                graph={noteGraph()}
+                fileContents={fileContents()}
+                onBacklinkClick={(path, line) => openFile(path, line)}
+                onClose={() => setShowBacklinks(false)}
               />
             </div>
           </Show>
