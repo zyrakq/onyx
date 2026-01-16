@@ -11,8 +11,9 @@ import { Decoration, DecorationSet } from '@milkdown/prose/view';
 import { NoteIndex, normalizeName } from './note-index';
 
 // Regex to match wikilinks: [[target]] or [[target|alias]]
+// Uses negative lookbehind (?<!!) to exclude embeds ![[...]]
 // Captures: full match, target, optional alias
-const WIKILINK_REGEX = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+const WIKILINK_REGEX = /(?<!!)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 
 // Plugin key for external access
 export const wikilinkPluginKey = new PluginKey('wikilink');

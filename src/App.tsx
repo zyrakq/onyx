@@ -15,6 +15,7 @@ import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { HeadingInfo } from './lib/editor/heading-plugin';
+import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
 
 interface Tab {
   path: string;
@@ -47,6 +48,7 @@ const App: Component = () => {
   let setSearchQuery: ((query: string) => void) | null = null;
   const [scrollToLine, setScrollToLine] = createSignal<number | null>(null);
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
+  const [assetIndex, setAssetIndex] = createSignal<AssetIndex | null>(null);
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | null>(null);
 
   // Backlinks panel state
@@ -152,6 +154,13 @@ const App: Component = () => {
           setNoteIndex(buildNoteIndex(files, settings.vault_path));
         } catch (err) {
           console.error('Failed to build initial note index:', err);
+        }
+        // Build asset index for embed resolution
+        try {
+          const assets = await invoke<AssetEntry[]>('list_assets', { path: settings.vault_path });
+          setAssetIndex(buildAssetIndex(assets, settings.vault_path));
+        } catch (err) {
+          console.error('Failed to build initial asset index:', err);
         }
       }
       if (settings.show_terminal) {
@@ -480,7 +489,7 @@ const App: Component = () => {
     }
   };
 
-  // Build/rebuild note index for wikilink resolution
+  // Build/rebuild note index for wikilink resolution and asset index for embeds
   const rebuildNoteIndex = async () => {
     const path = vaultPath();
     if (!path) return;
@@ -489,6 +498,13 @@ const App: Component = () => {
       setNoteIndex(buildNoteIndex(files, path));
     } catch (err) {
       console.error('Failed to build note index:', err);
+    }
+    // Also rebuild asset index
+    try {
+      const assets = await invoke<AssetEntry[]>('list_assets', { path });
+      setAssetIndex(buildAssetIndex(assets, path));
+    } catch (err) {
+      console.error('Failed to build asset index:', err);
     }
   };
 
@@ -919,9 +935,21 @@ const App: Component = () => {
                 onScrollComplete={() => setScrollToLine(null)}
                 onWikilinkClick={handleWikilinkClick}
                 noteIndex={noteIndex()}
+                assetIndex={assetIndex()}
                 onHeadingsChange={setCurrentHeadings}
                 onActiveHeadingChange={setActiveHeadingId}
                 scrollToHeadingId={scrollToHeadingId()}
+                onFilesUploaded={async () => {
+                  // Rebuild asset index after files are uploaded
+                  if (vaultPath()) {
+                    try {
+                      const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultPath() });
+                      setAssetIndex(buildAssetIndex(assets, vaultPath()!));
+                    } catch (err) {
+                      console.error('Failed to rebuild asset index after upload:', err);
+                    }
+                  }
+                }}
               />
             }>
               <GraphView
