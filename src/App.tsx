@@ -75,6 +75,11 @@ const App: Component = () => {
   const [currentHeadings, setCurrentHeadings] = createSignal<HeadingInfo[]>([]);
   const [activeHeadingId, setActiveHeadingId] = createSignal<string | null>(null);
   const [scrollToHeadingId, setScrollToHeadingId] = createSignal<string | null>(null);
+
+  // Anchor navigation state (for wikilink #heading and ^blockid references)
+  const [scrollToHeadingText, setScrollToHeadingText] = createSignal<string | null>(null);
+  const [scrollToBlockId, setScrollToBlockId] = createSignal<string | null>(null);
+
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
@@ -509,10 +514,32 @@ const App: Component = () => {
   };
 
   // Handle wikilink clicks from editor
-  const handleWikilinkClick = async (target: string) => {
+  const handleWikilinkClick = async (
+    target: string,
+    heading?: string | null,
+    blockId?: string | null
+  ) => {
     const index = noteIndex();
     const vault = vaultPath();
     if (!vault) return;
+
+    // Clear previous anchor state first (allows re-triggering same anchor)
+    setScrollToHeadingText(null);
+    setScrollToBlockId(null);
+
+    // Same-note reference (empty target) - now handled directly in wikilink plugin
+    // This branch is kept for any edge cases where same-note refs still come through
+    if (!target) {
+      // Small delay to ensure clear takes effect before setting new value
+      setTimeout(() => {
+        if (heading) {
+          setScrollToHeadingText(heading);
+        } else if (blockId) {
+          setScrollToBlockId(blockId);
+        }
+      }, 10);
+      return;
+    }
 
     // Resolve the wikilink to a file path
     const resolved = resolveWikilink(
@@ -525,8 +552,20 @@ const App: Component = () => {
     if (resolved.exists && resolved.path) {
       // Open existing note
       await openFile(resolved.path);
+
+      // After opening, navigate to anchor if specified
+      // Use setTimeout to allow the editor to load the content first
+      if (heading || blockId) {
+        setTimeout(() => {
+          if (heading) {
+            setScrollToHeadingText(heading);
+          } else if (blockId) {
+            setScrollToBlockId(blockId);
+          }
+        }, 200);
+      }
     } else if (resolved.path) {
-      // Create new note
+      // Create new note (no anchor navigation for new notes)
       try {
         await invoke('create_file', { path: resolved.path });
         await openFile(resolved.path);
@@ -936,9 +975,12 @@ const App: Component = () => {
                 onWikilinkClick={handleWikilinkClick}
                 noteIndex={noteIndex()}
                 assetIndex={assetIndex()}
+                fileContents={fileContents()}
                 onHeadingsChange={setCurrentHeadings}
                 onActiveHeadingChange={setActiveHeadingId}
                 scrollToHeadingId={scrollToHeadingId()}
+                scrollToHeadingText={scrollToHeadingText()}
+                scrollToBlockId={scrollToBlockId()}
                 onFilesUploaded={async () => {
                   // Rebuild asset index after files are uploaded
                   if (vaultPath()) {

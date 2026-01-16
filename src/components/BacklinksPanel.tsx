@@ -104,7 +104,15 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
                       class="backlinks-item"
                       onClick={() => props.onBacklinkClick(backlink.sourcePath, backlink.lineNumber)}
                     >
-                      <span class="backlinks-item-name">{backlink.sourceName}</span>
+                      <div class="backlinks-item-header">
+                        <span class="backlinks-item-name">{backlink.sourceName}</span>
+                        {backlink.heading && (
+                          <span class="backlinks-anchor">#{backlink.heading}</span>
+                        )}
+                        {backlink.blockId && (
+                          <span class="backlinks-anchor">^{backlink.blockId}</span>
+                        )}
+                      </div>
                       <HighlightedContext
                         text={backlink.context}
                         start={backlink.mentionStart}

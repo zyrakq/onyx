@@ -13,6 +13,8 @@ import { wikilinkPlugin, setWikilinkClickHandler, setWikilinkNoteIndex } from '.
 import { NoteIndex } from '../lib/editor/note-index';
 import { taskPlugin } from '../lib/taskPlugin';
 import { headingPlugin, headingPluginKey, HeadingInfo } from '../lib/editor/heading-plugin';
+import { blockPlugin, blockPluginKey } from '../lib/editor/block-plugin';
+import { linkAutocompletePlugin, setAutocompleteContext } from '../lib/editor/link-autocomplete-plugin';
 import {
   embedSchema,
   embedView,
@@ -45,13 +47,18 @@ interface EditorProps {
   onHashtagClick?: (tag: string) => void;
   scrollToLine?: number | null;
   onScrollComplete?: () => void;
-  onWikilinkClick?: (target: string) => void;
+  onWikilinkClick?: (target: string, heading?: string | null, blockId?: string | null) => void;
   noteIndex?: NoteIndex | null;
   assetIndex?: AssetIndex | null;
+  // File contents map for autocomplete
+  fileContents?: Map<string, string>;
   // Heading plugin props
   onHeadingsChange?: (headings: HeadingInfo[]) => void;
   onActiveHeadingChange?: (id: string | null) => void;
   scrollToHeadingId?: string | null;
+  // Anchor navigation props (for wikilink heading/block references)
+  scrollToHeadingText?: string | null;
+  scrollToBlockId?: string | null;
   // Upload callback for when files are dropped/pasted
   onFilesUploaded?: () => void;
 }
@@ -98,6 +105,9 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
     setEmbedVaultPath(props.vaultPath || null);
     setEmbedCurrentFilePath(props.filePath || null);
 
+    // Set up autocomplete context for heading/block suggestions
+    setAutocompleteContext(props.vaultPath || null, props.filePath || null, props.fileContents);
+
     // Set up upload context for drag-drop and paste
     setUploadVaultPath(props.vaultPath || null);
     setOnFilesUploaded(props.onFilesUploaded || null);
@@ -120,6 +130,8 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(wikilinkPlugin)
       .use(taskPlugin)
       .use(headingPlugin)
+      .use(blockPlugin)
+      .use(linkAutocompletePlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {
@@ -424,6 +436,71 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
             view.dispatch(tr.setSelection(TextSelection.near($pos)).scrollIntoView());
           } catch (e) {
             console.error('Failed to scroll to heading:', e);
+          }
+        }
+      }
+    )
+  );
+
+  // Handle scroll to heading by text (from wikilink anchor navigation)
+  createEffect(
+    on(
+      () => props.scrollToHeadingText,
+      (headingText) => {
+        if (!headingText || !editorInstance?.ctx) return;
+
+        const view = editorInstance.ctx.get(editorViewCtx);
+        const headings = headingPluginKey.getState(view.state) || [];
+        // Find heading by text (case-insensitive)
+        const heading = headings.find(
+          h => h.text.toLowerCase() === headingText.toLowerCase()
+        );
+
+        if (heading) {
+          try {
+            const domNode = view.nodeDOM(heading.pos);
+            if (domNode instanceof HTMLElement) {
+              domNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return;
+            }
+
+            const { tr } = view.state;
+            const $pos = view.state.doc.resolve(heading.pos);
+            view.dispatch(tr.setSelection(TextSelection.near($pos)).scrollIntoView());
+          } catch (e) {
+            console.error('Failed to scroll to heading:', e);
+          }
+        }
+      }
+    )
+  );
+
+  // Handle scroll to block (from wikilink anchor navigation)
+  createEffect(
+    on(
+      () => props.scrollToBlockId,
+      (blockId) => {
+        if (!blockId || !editorInstance?.ctx) return;
+
+        const view = editorInstance.ctx.get(editorViewCtx);
+        const blocks = blockPluginKey.getState(view.state) || [];
+        const block = blocks.find(b => b.id === blockId);
+
+        if (block) {
+          try {
+            // Use nodeDOM like heading navigation does
+            const domNode = view.nodeDOM(block.pos);
+            if (domNode instanceof HTMLElement) {
+              domNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return;
+            }
+
+            // Fallback to selection-based scrolling
+            const { tr } = view.state;
+            const $pos = view.state.doc.resolve(block.pos);
+            view.dispatch(tr.setSelection(TextSelection.near($pos)).scrollIntoView());
+          } catch (e) {
+            console.error('Failed to scroll to block:', e);
           }
         }
       }

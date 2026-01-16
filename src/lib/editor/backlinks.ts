@@ -3,6 +3,7 @@
  *
  * Provides functionality to find all notes linking to a given note,
  * including both explicit wikilinks and unlinked mentions.
+ * Also tracks heading and block references in wikilinks.
  */
 
 import { NoteGraph } from './note-index';
@@ -15,6 +16,8 @@ export interface BacklinkInfo {
   isLinked: boolean;       // true = [[link]], false = plain text mention
   mentionStart: number;    // Character position where mention starts in context
   mentionEnd: number;      // Character position where mention ends in context
+  heading?: string;        // Optional heading reference (after #)
+  blockId?: string;        // Optional block ID reference (after ^)
 }
 
 export interface BacklinksData {
@@ -49,11 +52,12 @@ function normalizePath(path: string): string {
  * Check if a line contains a wikilink to the target (handles escaped brackets)
  */
 function lineContainsWikilinkTo(line: string, targetName: string): boolean {
-  // Use regex to match wikilinks with optional escaping and optional alias
-  // Matches: [[target]], [[target|alias]], \[\[target\]\], \[\[target|alias\]\]
+  // Use regex to match wikilinks with optional escaping, heading, block ID, and alias
+  // Matches: [[target]], [[target|alias]], [[target#heading]], [[target^block]],
+  // [[target#heading|alias]], [[target^block|alias]], etc.
   const escapedTarget = escapeRegex(targetName);
   const wikilinkPattern = new RegExp(
-    `\\\\?\\[\\\\?\\[${escapedTarget}(\\|[^\\]]*)?\\\\?\\]\\\\?\\]`,
+    `\\\\?\\[\\\\?\\[${escapedTarget}(?:#[^\\]|^]*)?(?:\\^[^\\]|]*)?(?:#\\^[^\\]|]*)?(\\|[^\\]]*)?\\\\?\\]\\\\?\\]`,
     'i'
   );
   return wikilinkPattern.test(line);
@@ -64,19 +68,22 @@ interface LinkContext {
   lineNumber: number;
   mentionStart: number;
   mentionEnd: number;
+  heading?: string;
+  blockId?: string;
 }
 
 /**
- * Find the line containing a wikilink with position info
+ * Find the line containing a wikilink with position info and anchor references
  */
 function findLinkContext(content: string, linkTarget: string): LinkContext {
   const lines = content.split('\n');
 
-  // Build regex to match [[target]], [[target|alias]], and escaped versions
+  // Build regex to match [[target]], [[target#heading]], [[target^block]], [[target|alias]], and escaped versions
+  // Also captures heading (after #) and block ID (after ^ or #^)
   // Case-insensitive matching
   const escapedTarget = escapeRegex(linkTarget);
   const wikilinkRegex = new RegExp(
-    `(\\\\?\\[\\\\?\\[)(${escapedTarget})(\\|[^\\]]*)?\\\\?\\]\\\\?\\]`,
+    `(\\\\?\\[\\\\?\\[)(${escapedTarget})(?:#([^\\]|^]+?))?(?:\\^([^\\]|]+))?(?:#\\^([^\\]|]+))?(\\|[^\\]]*)?\\\\?\\]\\\\?\\]`,
     'i'
   );
 
@@ -88,16 +95,25 @@ function findLinkContext(content: string, linkTarget: string): LinkContext {
       const trimmed = line.trim();
       const trimOffset = line.indexOf(trimmed);
       // match[1] is the opening brackets, match[2] is the target
+      // match[3] is the heading (after #)
+      // match[4] is the block ID (after ^)
+      // match[5] is the block ID (after #^)
       const fullMatchStart = match.index;
       const targetStartInMatch = match[1].length;
       const mentionStart = fullMatchStart - trimOffset + targetStartInMatch;
       const mentionEnd = mentionStart + linkTarget.length;
 
+      const heading = match[3]?.trim() || undefined;
+      // Block ID can come from either ^blockid or #^blockid syntax
+      const blockId = match[4]?.trim() || match[5]?.trim() || undefined;
+
       return {
         context: trimmed,
         lineNumber: i + 1,
         mentionStart: Math.max(0, mentionStart),
-        mentionEnd: Math.min(trimmed.length, mentionEnd)
+        mentionEnd: Math.min(trimmed.length, mentionEnd),
+        heading,
+        blockId
       };
     }
   }
@@ -134,7 +150,7 @@ export function getBacklinksForNote(
     if (normalizedLinkTo === normalizedTargetPath && normalizedLinkFrom !== normalizedTargetPath) {
       const sourceNode = graph.nodes.find(n => normalizePath(n.id) === normalizedLinkFrom);
       const content = fileContents.get(link.from) || '';
-      const { context, lineNumber, mentionStart, mentionEnd } = findLinkContext(content, link.toRaw);
+      const { context, lineNumber, mentionStart, mentionEnd, heading, blockId } = findLinkContext(content, link.toRaw);
 
       linked.push({
         sourcePath: link.from,
@@ -143,7 +159,9 @@ export function getBacklinksForNote(
         lineNumber,
         isLinked: true,
         mentionStart,
-        mentionEnd
+        mentionEnd,
+        heading,
+        blockId
       });
 
       // Track this source+line as having a linked mention
