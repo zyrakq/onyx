@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { hashtagPlugin, setHashtagClickHandler } from '../lib/hashtagPlugin';
 import { wikilinkPlugin, setWikilinkClickHandler, setWikilinkNoteIndex } from '../lib/editor/wikilink-plugin';
 import { NoteIndex } from '../lib/editor/note-index';
+import { taskPlugin } from '../lib/taskPlugin';
 
 import '@milkdown/theme-nord/style.css';
 
@@ -68,6 +69,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(listener)
       .use(hashtagPlugin)
       .use(wikilinkPlugin)
+      .use(taskPlugin)
       // Configure listener after the plugin is loaded
       .config((ctx) => {
         ctx.get(listenerCtx).markdownUpdated((ctx, markdown, prevMarkdown) => {

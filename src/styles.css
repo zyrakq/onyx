@@ -746,6 +746,71 @@ body {
   overflow: hidden;
 }
 
+/* Task List Items */
+.milkdown-editor li[data-item-type="task"] {
+  list-style: none;
+  position: relative;
+  padding-left: 28px;
+  margin-left: -28px;
+  cursor: pointer;
+}
+
+.milkdown-editor li[data-item-type="task"]::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--text-secondary);
+  border-radius: 3px;
+  cursor: pointer !important;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.milkdown-editor li[data-item-type="task"]:hover::before {
+  border-color: var(--accent);
+}
+
+/* Checked task state */
+.milkdown-editor li[data-item-type="task"][data-checked="true"]::before {
+  background: #a78bfa;
+  border-color: #a78bfa;
+}
+
+.milkdown-editor li[data-item-type="task"][data-checked="true"]::after {
+  content: '✓';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  font-weight: bold;
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+  cursor: pointer;
+  pointer-events: none;
+}
+
+.milkdown-editor li[data-item-type="task"][data-checked="true"] {
+  color: var(--text-secondary);
+}
+
+.milkdown-editor li[data-item-type="task"][data-checked="true"] > p,
+.milkdown-editor li[data-item-type="task"][data-checked="true"] > span {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
 .milkdown-editor hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
 .milkdown-editor table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
 .milkdown-editor th, .milkdown-editor td { border: 1px solid var(--border); padding: 0.5em 1em; text-align: left; }
