@@ -15,14 +15,15 @@ Users increasingly want to own their data while still having it accessible acros
 
 ## Overview
 
-The protocol uses two event kinds:
+The protocol uses three event kinds:
 
 | Kind | Description |
 |------|-------------|
-| `30800` | Encrypted file content |
-| `30801` | Encrypted vault/collection index |
+| `30800` | Encrypted file content (self-encrypted) |
+| `30801` | Encrypted vault/collection index (self-encrypted) |
+| `30802` | Shared document (encrypted to recipient) |
 
-All sensitive data (file contents, paths, names, structure) is encrypted using NIP-44 encryption to the user's own public key (self-encryption).
+All sensitive data (file contents, paths, names, structure) is encrypted using NIP-44 encryption. Kinds 30800 and 30801 use self-encryption (to the user's own public key), while kind 30802 encrypts to a specific recipient's public key for document sharing.
 
 ## Event Kinds
 
@@ -185,6 +186,117 @@ A parameterized replaceable event containing the index of a vault (collection of
 | `path` | string | Path of the deleted file |
 | `deletedAt` | integer | Unix timestamp of deletion |
 | `lastEventId` | string | Event ID of the last version before deletion |
+
+### Kind 30802: Shared Document
+
+A parameterized replaceable event containing a document shared with another user. Unlike kinds 30800/30801, this event encrypts content to the *recipient's* public key, allowing secure document sharing between users.
+
+```json
+{
+  "kind": 30802,
+  "pubkey": "<sender-pubkey>",
+  "created_at": <unix-timestamp>,
+  "tags": [
+    ["d", "<random-uuid>"],
+    ["p", "<recipient-pubkey>"],
+    ["title", "<document-title>"],
+    ["encrypted", "nip44"]
+  ],
+  "content": "<NIP-44 encrypted payload>",
+  "sig": "<signature>"
+}
+```
+
+#### Tags
+
+- `d` (REQUIRED): A random UUID (v4) that uniquely identifies this shared document.
+- `p` (REQUIRED): The recipient's public key (hex). This allows the recipient to query for documents shared with them.
+- `title` (OPTIONAL): Cleartext document title for notification purposes. May be omitted for privacy.
+- `encrypted` (REQUIRED): The encryption scheme used. Currently only `nip44` is defined.
+
+#### Encrypted Content Structure
+
+After decrypting the `content` field using NIP-44 with the shared conversation key between sender and recipient:
+
+```json
+{
+  "title": "<document-title>",
+  "content": "<markdown-content>",
+  "path": "<original-file-path>",
+  "sharedAt": <unix-timestamp>,
+  "sharedBy": {
+    "pubkey": "<sender-pubkey>",
+    "name": "<sender-display-name>",
+    "picture": "<sender-avatar-url>"
+  },
+  "metadata": {
+    <application-specific-metadata>
+  }
+}
+```
+
+##### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `title` | string | Yes | Document title (typically filename without extension) |
+| `content` | string | Yes | The document content (typically Markdown) |
+| `path` | string | No | Original file path (for reference, not used on import) |
+| `sharedAt` | integer | Yes | Unix timestamp when the document was shared |
+| `sharedBy` | object | Yes | Information about the sender |
+| `sharedBy.pubkey` | string | Yes | Sender's public key (hex) |
+| `sharedBy.name` | string | No | Sender's display name |
+| `sharedBy.picture` | string | No | Sender's avatar URL |
+| `metadata` | object | No | Application-specific metadata |
+
+#### Querying Shared Documents
+
+**Documents shared with me:**
+```
+REQ: {"kinds": [30802], "#p": ["<my-pubkey>"]}
+```
+
+**Documents I've shared:**
+```
+REQ: {"kinds": [30802], "authors": ["<my-pubkey>"]}
+```
+
+#### Revoking a Share
+
+To revoke a shared document, publish a new version of the same event (same `d` tag) with empty content or a deletion marker:
+
+```json
+{
+  "kind": 30802,
+  "tags": [
+    ["d", "<same-uuid>"],
+    ["p", "<recipient-pubkey>"],
+    ["deleted", "true"]
+  ],
+  "content": ""
+}
+```
+
+Alternatively, use NIP-09 deletion events to request relays remove the original event.
+
+#### Sharing Flow
+
+1. **Share**: Sender encrypts document content to recipient's pubkey using NIP-44
+2. **Publish**: Sender publishes kind 30802 event
+3. **Notify** (optional): Sender sends NIP-17 DM to notify recipient
+4. **Discover**: Recipient queries for kind 30802 events with their pubkey in `p` tag
+5. **Decrypt**: Recipient decrypts content using shared conversation key
+6. **Import**: Recipient optionally imports document to their vault
+
+#### One-Time Snapshot
+
+Kind 30802 represents a **snapshot** of the document at the time of sharing. It is not a live sync:
+
+- Updates to the original file do NOT update the shared document
+- Recipient receives a copy they can import and modify independently
+- To share an updated version, create a new kind 30802 event (new `d` tag)
+
+This design keeps the protocol simple and avoids complex permission management.
 
 ## Encryption
 
@@ -423,6 +535,56 @@ async function createFileEvent(
 }
 ```
 
+### Example: Sharing a Document
+
+```javascript
+import { finalizeEvent, nip44 } from 'nostr-tools';
+import { v4 as uuidv4 } from 'uuid';
+
+async function shareDocument(
+  senderPrivateKey: Uint8Array,
+  senderPubkey: string,
+  senderName: string,
+  recipientPubkey: string,
+  title: string,
+  content: string,
+  originalPath?: string
+) {
+  // Get conversation key between sender and recipient
+  const conversationKey = nip44.v2.utils.getConversationKey(
+    senderPrivateKey,
+    recipientPubkey
+  );
+
+  const payload = JSON.stringify({
+    title,
+    content,
+    path: originalPath || null,
+    sharedAt: Math.floor(Date.now() / 1000),
+    sharedBy: {
+      pubkey: senderPubkey,
+      name: senderName,
+    }
+  });
+
+  const encrypted = nip44.v2.encrypt(payload, conversationKey);
+
+  const event = finalizeEvent({
+    kind: 30802,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', uuidv4()],
+      ['p', recipientPubkey],
+      ['title', title],
+      ['encrypted', 'nip44']
+    ],
+    content: encrypted
+  }, senderPrivateKey);
+
+  return event;
+}
+```
+
 ## Test Vectors
 
 ### File Event
@@ -459,9 +621,40 @@ Input:
 }
 ```
 
+### Shared Document Event
+
+Sender private key (hex): `0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef`
+Recipient public key (hex): `fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210`
+
+Input:
+```json
+{
+  "title": "Meeting Notes",
+  "content": "# Meeting Notes\n\nDiscussed project timeline...",
+  "sharedAt": 1705234567,
+  "sharedBy": {
+    "pubkey": "abc123...",
+    "name": "Alice"
+  }
+}
+```
+
+Expected tags:
+```json
+[
+  ["d", "<random-uuid>"],
+  ["p", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"],
+  ["title", "Meeting Notes"],
+  ["encrypted", "nip44"]
+]
+```
+
 ## References
 
 - [NIP-01: Basic Protocol](https://github.com/nostr-protocol/nips/blob/master/01.md)
+- [NIP-05: Mapping Nostr keys to DNS-based internet identifiers](https://github.com/nostr-protocol/nips/blob/master/05.md)
+- [NIP-09: Event Deletion Request](https://github.com/nostr-protocol/nips/blob/master/09.md)
+- [NIP-17: Private Direct Messages](https://github.com/nostr-protocol/nips/blob/master/17.md)
 - [NIP-33: Parameterized Replaceable Events](https://github.com/nostr-protocol/nips/blob/master/33.md)
 - [NIP-44: Encrypted Payloads](https://github.com/nostr-protocol/nips/blob/master/44.md)
 - [NIP-98: HTTP Auth](https://github.com/nostr-protocol/nips/blob/master/98.md)
