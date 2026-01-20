@@ -26,6 +26,7 @@ interface SidebarProps {
   exposeCreateNote?: (fn: () => void) => void;
   exposeRefresh?: (fn: () => void) => void;
   exposeSearchQuery?: (fn: (query: string) => void) => void;
+  onShareFile?: (path: string, content: string) => void;
 }
 
 interface SearchResult {
@@ -905,6 +906,25 @@ const Sidebar: Component<SidebarProps> = (props) => {
           >
             {props.bookmarks.includes(contextMenu()!.path) ? 'Remove bookmark' : 'Bookmark'}
           </div>
+
+          {/* Share option for files only */}
+          <Show when={!contextMenu()!.isDir && props.onShareFile}>
+            <div
+              class="context-menu-item"
+              onClick={async () => {
+                const path = contextMenu()!.path;
+                closeContextMenu();
+                try {
+                  const content = await invoke<string>('read_file', { path });
+                  props.onShareFile?.(path, content);
+                } catch (err) {
+                  console.error('Failed to read file for sharing:', err);
+                }
+              }}
+            >
+              Share via Nostr...
+            </div>
+          </Show>
 
           <div class="context-menu-divider" />
 

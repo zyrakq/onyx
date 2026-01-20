@@ -7,6 +7,12 @@
 // Event Kinds
 export const KIND_FILE = 30800;
 export const KIND_VAULT_INDEX = 30801;
+export const KIND_SHARED_DOCUMENT = 30802;
+
+// NIP-17 Direct Messages (Gift Wrapped)
+export const KIND_GIFT_WRAP = 1059;
+export const KIND_SEAL = 13;
+export const KIND_PRIVATE_MESSAGE = 14;
 
 // Encryption method
 export const ENCRYPTION_METHOD = 'nip44';
@@ -236,3 +242,106 @@ export const DEFAULT_SYNC_CONFIG: SyncConfig = {
   syncFrequency: 0, // Manual by default
   conflictResolution: 'manual',
 };
+
+// ============================================
+// Document Sharing Types (Kind 30802)
+// ============================================
+
+/**
+ * Information about who shared a document
+ */
+export interface SharedByInfo {
+  /** Sender's public key (hex) */
+  pubkey: string;
+  /** Sender's display name (if known at share time) */
+  name?: string;
+  /** Sender's NIP-05 identifier (if known) */
+  nip05?: string;
+}
+
+/**
+ * Decrypted content of a kind 30802 shared document event
+ * Encrypted to recipient's pubkey using NIP-44
+ */
+export interface SharedDocumentPayload {
+  /** Original path of the document */
+  path: string;
+  /** Document content (UTF-8) */
+  content: string;
+  /** SHA-256 hash of content (hex) */
+  checksum: string;
+  /** Information about the sender */
+  sharedBy: SharedByInfo;
+  /** Unix timestamp when shared */
+  sharedAt: number;
+  /** Binary attachments (same format as FilePayload) */
+  attachments?: Attachment[];
+}
+
+/**
+ * A document shared with the current user
+ */
+export interface SharedDocument {
+  /** Event ID of the kind 30802 event */
+  eventId: string;
+  /** The d-tag of the shared document event */
+  d: string;
+  /** Document title (from unencrypted tag) */
+  title: string;
+  /** Sender's public key (from event pubkey) */
+  senderPubkey: string;
+  /** Event creation timestamp */
+  createdAt: number;
+  /** Decrypted document data */
+  data: SharedDocumentPayload;
+  /** Whether user has viewed this shared document (local state) */
+  isRead: boolean;
+}
+
+/**
+ * A document the current user has shared with others
+ */
+export interface SentShare {
+  /** Event ID of the kind 30802 event */
+  eventId: string;
+  /** The d-tag of the shared document event */
+  d: string;
+  /** Document title */
+  title: string;
+  /** Recipient's public key */
+  recipientPubkey: string;
+  /** Recipient's display name (if known) */
+  recipientName?: string;
+  /** Unix timestamp when shared */
+  sharedAt: number;
+  /** Original document path */
+  path: string;
+}
+
+/**
+ * Result of sharing a document
+ */
+export interface ShareResult {
+  /** The published event ID */
+  eventId: string;
+  /** Whether NIP-17 DM notification was sent */
+  dmSent: boolean;
+  /** Error message if DM failed (sharing still succeeded) */
+  dmError?: string;
+}
+
+/**
+ * Nostr user profile (for displaying sender/recipient info)
+ */
+export interface NostrProfile {
+  /** Public key (hex) */
+  pubkey: string;
+  /** Display name */
+  name?: string;
+  /** Profile picture URL */
+  picture?: string;
+  /** NIP-05 identifier */
+  nip05?: string;
+  /** About/bio */
+  about?: string;
+}

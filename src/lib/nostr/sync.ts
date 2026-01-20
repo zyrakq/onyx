@@ -11,6 +11,7 @@ import { hexToBytes } from '@noble/hashes/utils.js';
 import {
   KIND_FILE,
   KIND_VAULT_INDEX,
+  KIND_SHARED_DOCUMENT,
   ENCRYPTION_METHOD,
   type NostrIdentity,
   type Vault,
@@ -21,14 +22,15 @@ import {
   type SyncConfig,
   type RelayStatus,
   type SyncConflict,
+  type SharedDocument,
+  type SharedDocumentPayload,
+  type SentShare,
+  type ShareResult,
+  type Attachment,
   DEFAULT_SYNC_CONFIG,
 } from './types';
 import {
   getConversationKey,
-  encryptFilePayload,
-  decryptFilePayload,
-  encryptVaultPayload,
-  decryptVaultPayload,
   calculateChecksum,
 } from './crypto';
 import type { NostrSigner } from './signer';
@@ -558,6 +560,285 @@ export class SyncEngine {
     }
     this.subscriptions.clear();
     this.pool.close(this.config.relays);
+  }
+
+  // ============================================
+  // Document Sharing Methods (Kind 30802)
+  // ============================================
+
+  /**
+   * Encrypt content to a recipient's pubkey (for sharing)
+   */
+  private async encryptToRecipient(plaintext: string, recipientPubkey: string): Promise<string> {
+    if (this.signer?.nip44) {
+      // Use signer's NIP-44 to encrypt to recipient
+      return await this.signer.nip44.encrypt(recipientPubkey, plaintext);
+    } else if (this.identity) {
+      // Legacy: compute conversation key with recipient and encrypt
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(this.identity.privkey),
+        recipientPubkey
+      );
+      return nip44.v2.encrypt(plaintext, conversationKey);
+    } else {
+      throw new Error('No encryption method available');
+    }
+  }
+
+  /**
+   * Decrypt content from a sender's pubkey (for receiving shared docs)
+   */
+  private async decryptFromSender(ciphertext: string, senderPubkey: string): Promise<string> {
+    if (this.signer?.nip44) {
+      // Use signer's NIP-44 to decrypt from sender
+      return await this.signer.nip44.decrypt(senderPubkey, ciphertext);
+    } else if (this.identity) {
+      // Legacy: compute conversation key with sender and decrypt
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(this.identity.privkey),
+        senderPubkey
+      );
+      return nip44.v2.decrypt(ciphertext, conversationKey);
+    } else {
+      throw new Error('No decryption method available');
+    }
+  }
+
+  /**
+   * Share a document with another user
+   * 
+   * @param recipientPubkey - Recipient's hex pubkey
+   * @param title - Document title (stored in cleartext tag for notifications)
+   * @param content - Document content
+   * @param path - Original file path
+   * @param attachments - Optional attachments
+   * @param senderName - Optional sender display name
+   * @returns ShareResult with event ID and DM status
+   */
+  async shareDocument(
+    recipientPubkey: string,
+    title: string,
+    content: string,
+    path: string,
+    attachments?: Attachment[],
+    senderName?: string
+  ): Promise<ShareResult> {
+    this.ensureIdentity();
+
+    const now = Math.floor(Date.now() / 1000);
+    const d = uuidv4();
+
+    const payload: SharedDocumentPayload = {
+      path,
+      content,
+      checksum: calculateChecksum(content),
+      sharedBy: {
+        pubkey: this.pubkey!,
+        name: senderName,
+      },
+      sharedAt: now,
+      attachments,
+    };
+
+    // Encrypt to recipient's pubkey
+    const encryptedContent = await this.encryptToRecipient(
+      JSON.stringify(payload),
+      recipientPubkey
+    );
+
+    const event = await this.signEvent({
+      kind: KIND_SHARED_DOCUMENT,
+      created_at: now,
+      tags: [
+        ['d', d],
+        ['p', recipientPubkey],
+        ['encrypted', ENCRYPTION_METHOD],
+        ['title', title],
+      ],
+      content: encryptedContent,
+    });
+
+    await this.publishEvent(event);
+
+    // TODO: Send NIP-17 DM notification (implemented in Phase 6)
+    const dmSent = false;
+    const dmError = undefined;
+
+    return {
+      eventId: event.id,
+      dmSent,
+      dmError,
+    };
+  }
+
+  /**
+   * Fetch documents shared with the current user
+   */
+  async fetchSharedWithMe(): Promise<SharedDocument[]> {
+    this.ensureIdentity();
+
+    const events = await this.pool.querySync(
+      this.config.relays,
+      {
+        kinds: [KIND_SHARED_DOCUMENT],
+        '#p': [this.pubkey!],
+      }
+    );
+
+    const sharedDocs: SharedDocument[] = [];
+    const readIds = this.getReadShareIds();
+
+    for (const event of events) {
+      try {
+        // Decrypt from sender's pubkey
+        const decrypted = await this.decryptFromSender(event.content, event.pubkey);
+        const data = JSON.parse(decrypted) as SharedDocumentPayload;
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        const titleTag = event.tags.find(t => t[0] === 'title')?.[1];
+
+        if (dTag) {
+          sharedDocs.push({
+            eventId: event.id,
+            d: dTag,
+            title: titleTag || this.extractTitleFromPath(data.path),
+            senderPubkey: event.pubkey,
+            createdAt: event.created_at,
+            data,
+            isRead: readIds.includes(event.id),
+          });
+        }
+      } catch (err) {
+        console.error('Failed to decrypt shared document:', err);
+      }
+    }
+
+    // Sort by date, newest first
+    sharedDocs.sort((a, b) => b.createdAt - a.createdAt);
+
+    return sharedDocs;
+  }
+
+  /**
+   * Fetch documents the current user has shared with others
+   */
+  async fetchSentShares(): Promise<SentShare[]> {
+    this.ensureIdentity();
+
+    const events = await this.pool.querySync(
+      this.config.relays,
+      {
+        kinds: [KIND_SHARED_DOCUMENT],
+        authors: [this.pubkey!],
+      }
+    );
+
+    const sentShares: SentShare[] = [];
+
+    for (const event of events) {
+      try {
+        const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+        const pTag = event.tags.find(t => t[0] === 'p')?.[1];
+        const titleTag = event.tags.find(t => t[0] === 'title')?.[1];
+
+        if (dTag && pTag) {
+          // We can't decrypt our own shared docs (they're encrypted to recipient)
+          // but we have the title and recipient in tags
+          sentShares.push({
+            eventId: event.id,
+            d: dTag,
+            title: titleTag || 'Untitled',
+            recipientPubkey: pTag,
+            sharedAt: event.created_at,
+            path: '', // We don't have access to the encrypted path
+          });
+        }
+      } catch (err) {
+        console.error('Failed to parse sent share:', err);
+      }
+    }
+
+    // Sort by date, newest first
+    sentShares.sort((a, b) => b.sharedAt - a.sharedAt);
+
+    return sentShares;
+  }
+
+  /**
+   * Revoke a shared document (delete the event)
+   */
+  async revokeShare(eventId: string): Promise<void> {
+    this.ensureIdentity();
+
+    // NIP-09: Event Deletion
+    const now = Math.floor(Date.now() / 1000);
+
+    const deleteEvent = await this.signEvent({
+      kind: 5, // NIP-09 deletion
+      created_at: now,
+      tags: [
+        ['e', eventId],
+        ['k', String(KIND_SHARED_DOCUMENT)],
+      ],
+      content: 'Revoked shared document',
+    });
+
+    await this.publishEvent(deleteEvent);
+  }
+
+  /**
+   * Import a shared document into the user's vault
+   * Creates a new kind 30800 event (self-encrypted copy)
+   */
+  async importSharedDocument(
+    sharedDoc: SharedDocument,
+    vault: Vault,
+    targetPath?: string
+  ): Promise<{ file: SyncedFile; vault: Vault }> {
+    this.ensureIdentity();
+
+    // Determine the target path
+    const path = targetPath || `/Shared/${this.extractFilenameFromPath(sharedDoc.data.path)}`;
+
+    // Use the existing publishFile method which handles all the encryption
+    return this.publishFile(vault, path, sharedDoc.data.content);
+  }
+
+  /**
+   * Mark a shared document as read (local state)
+   */
+  markShareAsRead(eventId: string): void {
+    const readIds = this.getReadShareIds();
+    if (!readIds.includes(eventId)) {
+      readIds.push(eventId);
+      localStorage.setItem('read_share_ids', JSON.stringify(readIds));
+    }
+  }
+
+  /**
+   * Get IDs of shared documents that have been read
+   */
+  private getReadShareIds(): string[] {
+    try {
+      return JSON.parse(localStorage.getItem('read_share_ids') || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Extract filename from path
+   */
+  private extractFilenameFromPath(path: string): string {
+    const parts = path.split('/');
+    return parts[parts.length - 1] || 'document.md';
+  }
+
+  /**
+   * Extract title from path (filename without extension)
+   */
+  private extractTitleFromPath(path: string): string {
+    const filename = this.extractFilenameFromPath(path);
+    return filename.replace(/\.[^/.]+$/, '') || 'Untitled';
   }
 }
 

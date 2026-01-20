@@ -9,6 +9,10 @@ import Settings from './components/Settings';
 import GraphView from './components/GraphView';
 import OutlinePanel from './components/OutlinePanel';
 import BacklinksPanel from './components/BacklinksPanel';
+import ShareDialog from './components/ShareDialog';
+import NotificationsPanel from './components/NotificationsPanel';
+import SharedDocPreview from './components/SharedDocPreview';
+import SentSharesPanel from './components/SentSharesPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
@@ -16,6 +20,7 @@ import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { HeadingInfo } from './lib/editor/heading-plugin';
 import { AssetIndex, AssetEntry, buildAssetIndex } from './lib/editor/asset-index';
+import type { SharedDocument, SentShare, Vault } from './lib/nostr/types';
 
 interface Tab {
   path: string;
@@ -95,8 +100,26 @@ const App: Component = () => {
   // Close tab confirmation modal
   const [closeTabConfirm, setCloseTabConfirm] = createSignal<{ index: number; name: string } | null>(null);
 
+  // Document Sharing state
+  const [showNotifications, setShowNotifications] = createSignal(false);
+  const [showSentShares, setShowSentShares] = createSignal(false);
+  const [showShareDialog, setShowShareDialog] = createSignal(false);
+  const [shareTarget, setShareTarget] = createSignal<{ path: string; content: string; title: string } | null>(null);
+  const [sharedWithMe, setSharedWithMe] = createSignal<SharedDocument[]>([]);
+  const [sentShares, setSentShares] = createSignal<SentShare[]>([]);
+  const [isLoadingShares, setIsLoadingShares] = createSignal(false);
+  const [previewingDoc, setPreviewingDoc] = createSignal<SharedDocument | null>(null);
+  const [isImporting, setIsImporting] = createSignal(false);
+  const [currentVault, setCurrentVault] = createSignal<Vault | null>(null);
+
+  // Unread count for notifications badge
+  const unreadShareCount = () => sharedWithMe().filter(d => !d.isRead).length;
+
   // Auto-save timer
   let autoSaveTimeout: number | null = null;
+
+  // Share polling interval
+  let sharePollingInterval: number | null = null;
 
   // Debounce timer for file watcher
   let fileChangeDebounce: number | null = null;
@@ -229,8 +252,124 @@ const App: Component = () => {
       unlistenFn?.();
       unlistenFileModified?.();
       invoke('stop_watching').catch(() => {});
+      if (sharePollingInterval) {
+        clearInterval(sharePollingInterval);
+      }
     });
+
+    // Fetch shared documents if logged in
+    fetchSharedDocuments();
+
+    // Set up polling for shared documents (every 5 minutes)
+    sharePollingInterval = window.setInterval(() => {
+      fetchSharedDocuments();
+    }, 5 * 60 * 1000);
   });
+
+  // Fetch shared documents from relays
+  const fetchSharedDocuments = async () => {
+    const login = getCurrentLogin();
+    if (!login) return;
+
+    setIsLoadingShares(true);
+    try {
+      const engine = getSyncEngine();
+      const signer = getSignerFromStoredLogin();
+      if (signer) {
+        await engine.setSigner(signer);
+        
+        // Fetch documents shared with me and documents I've shared
+        const [receivedDocs, sentDocs] = await Promise.all([
+          engine.fetchSharedWithMe(),
+          engine.fetchSentShares(),
+        ]);
+        
+        setSharedWithMe(receivedDocs);
+        setSentShares(sentDocs);
+
+        // Also fetch vault for import functionality
+        const vaults = await engine.fetchVaults();
+        if (vaults.length > 0) {
+          setCurrentVault(vaults[0]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch shared documents:', err);
+    } finally {
+      setIsLoadingShares(false);
+    }
+  };
+
+  // Handle previewing a shared document
+  const handlePreviewSharedDoc = (doc: SharedDocument) => {
+    // Mark as read
+    const engine = getSyncEngine();
+    engine.markShareAsRead(doc.eventId);
+    
+    // Update local state
+    setSharedWithMe(prev => prev.map(d => 
+      d.eventId === doc.eventId ? { ...d, isRead: true } : d
+    ));
+    
+    setPreviewingDoc(doc);
+    setShowNotifications(false);
+  };
+
+  // Handle importing a shared document
+  const handleImportSharedDoc = async (doc: SharedDocument) => {
+    const vault = currentVault();
+    if (!vault) {
+      console.error('No vault available for import');
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const engine = getSyncEngine();
+      await engine.importSharedDocument(doc, vault);
+      
+      // Refresh sidebar to show new file
+      refreshSidebar?.();
+    } catch (err) {
+      console.error('Failed to import shared document:', err);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // Handle dismissing a shared document (just mark as read)
+  const handleDismissSharedDoc = (doc: SharedDocument) => {
+    const engine = getSyncEngine();
+    engine.markShareAsRead(doc.eventId);
+    
+    setSharedWithMe(prev => prev.map(d => 
+      d.eventId === doc.eventId ? { ...d, isRead: true } : d
+    ));
+  };
+
+  // Handle revoking a share
+  const handleRevokeShare = async (share: SentShare) => {
+    try {
+      const engine = getSyncEngine();
+      await engine.revokeShare(share.eventId);
+      
+      // Remove from local state
+      setSentShares(prev => prev.filter(s => s.eventId !== share.eventId));
+    } catch (err) {
+      console.error('Failed to revoke share:', err);
+    }
+  };
+
+  // Handle sharing a file
+  const handleShareFile = (path: string, content: string) => {
+    // Extract title from path
+    const parts = path.split('/');
+    const filename = parts[parts.length - 1] || 'Untitled';
+    const title = filename.replace(/\.[^/.]+$/, '');
+    
+    setShareTarget({ path, content, title });
+    setShowShareDialog(true);
+  };
 
   // Start/stop file watcher when vault path changes
   createEffect(() => {
@@ -874,6 +1013,19 @@ const App: Component = () => {
             <line x1="8" y1="12" x2="16" y2="12"></line>
           </svg>
         </button>
+        <button
+          class={`icon-btn ${showNotifications() ? 'active' : ''}`}
+          onClick={() => setShowNotifications(!showNotifications())}
+          title="Shared with me"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+          <Show when={unreadShareCount() > 0}>
+            <span class="notification-badge">{unreadShareCount()}</span>
+          </Show>
+        </button>
         <div class="icon-bar-spacer"></div>
         <button
           class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
@@ -924,6 +1076,7 @@ const App: Component = () => {
             exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
             exposeRefresh={(fn) => { refreshSidebar = fn; }}
             exposeSearchQuery={(fn) => { setSearchQuery = fn; }}
+            onShareFile={handleShareFile}
           />
         </div>
         <div
@@ -1194,6 +1347,55 @@ const App: Component = () => {
             </div>
           </div>
         </div>
+      </Show>
+
+      {/* Share Dialog */}
+      <Show when={showShareDialog() && shareTarget()}>
+        <ShareDialog
+          filePath={shareTarget()!.path}
+          content={shareTarget()!.content}
+          title={shareTarget()!.title}
+          onClose={() => {
+            setShowShareDialog(false);
+            setShareTarget(null);
+          }}
+          onSuccess={() => {
+            fetchSharedDocuments();
+          }}
+        />
+      </Show>
+
+      {/* Notifications Panel (Shared with me) */}
+      <Show when={showNotifications()}>
+        <NotificationsPanel
+          sharedDocuments={sharedWithMe()}
+          isLoading={isLoadingShares()}
+          onPreview={handlePreviewSharedDoc}
+          onRefresh={fetchSharedDocuments}
+          onClose={() => setShowNotifications(false)}
+        />
+      </Show>
+
+      {/* Shared Document Preview */}
+      <Show when={previewingDoc()}>
+        <SharedDocPreview
+          document={previewingDoc()!}
+          onImport={handleImportSharedDoc}
+          onDismiss={handleDismissSharedDoc}
+          onClose={() => setPreviewingDoc(null)}
+          isImporting={isImporting()}
+        />
+      </Show>
+
+      {/* Sent Shares Panel */}
+      <Show when={showSentShares()}>
+        <SentSharesPanel
+          sentShares={sentShares()}
+          isLoading={isLoadingShares()}
+          onRevoke={handleRevokeShare}
+          onRefresh={fetchSharedDocuments}
+          onClose={() => setShowSentShares(false)}
+        />
       </Show>
     </div>
   );
