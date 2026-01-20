@@ -436,7 +436,6 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
           props.filePath === currentPath() &&
           newContent !== lastEditorContent
         ) {
-          console.log('[Editor] External content change detected, updating editor');
           try {
             // Replace the editor content with the new markdown
             editorInstance.action((ctx) => {
