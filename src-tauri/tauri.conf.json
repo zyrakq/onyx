@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Onyx",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "com.onyxnotes.dev",
   "build": {
     "frontendDist": "../dist",
@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https: data:; media-src 'self' asset:; frame-src 'self' asset:; style-src 'self' 'unsafe-inline'"
+      "csp": null
     }
   },
   "bundle": {
