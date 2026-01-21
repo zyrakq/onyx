@@ -355,9 +355,12 @@ class SimpleNRelay1Adapter {
   }
 
   req(filters: any[], options?: { signal?: AbortSignal }): AsyncIterable<[string, string, any]> {
-    console.log('[NIP-46] NRelay1 subscribing with filters:', JSON.stringify(filters));
+    // Add since filter to only get events from now onwards (avoid old responses)
+    const now = Math.floor(Date.now() / 1000);
+    const filtersWithSince = filters.map(f => ({ ...f, since: now - 5 })); // 5 seconds buffer
+    console.log('[NIP-46] NRelay1 subscribing with filters:', JSON.stringify(filtersWithSince));
     const self = this;
-    const originalReq = this.relay.req(filters, options);
+    const originalReq = this.relay.req(filtersWithSince, options);
     
     // Wrap the async iterable to log messages
     return {
