@@ -5,9 +5,12 @@
  * Displays sender info, document title, and allows preview/import.
  */
 
-import { Component, For, Show } from 'solid-js';
+import { Component, For, Show, createSignal, createEffect } from 'solid-js';
 import { formatPubkey } from '../lib/nostr/nip05';
-import type { SharedDocument } from '../lib/nostr/types';
+import { fetchUserProfile } from '../lib/nostr/login';
+import { getSyncEngine } from '../lib/nostr/sync';
+import { sanitizeImageUrl } from '../lib/security';
+import type { SharedDocument, NostrProfile } from '../lib/nostr/types';
 
 interface NotificationsPanelProps {
   /** List of shared documents */
@@ -24,6 +27,89 @@ interface NotificationsPanelProps {
 
 const NotificationsPanel: Component<NotificationsPanelProps> = (props) => {
   const unreadCount = () => props.sharedDocuments.filter(d => !d.isRead).length;
+
+  // Cache of fetched sender profiles (pubkey -> profile)
+  const [senderProfiles, setSenderProfiles] = createSignal<Map<string, NostrProfile>>(new Map());
+  const [fetchingProfiles, setFetchingProfiles] = createSignal<Set<string>>(new Set());
+
+  // Fetch profiles for all unique senders
+  createEffect(() => {
+    const docs = props.sharedDocuments;
+    const profiles = senderProfiles();
+    const fetching = fetchingProfiles();
+    
+    // Get unique sender pubkeys we haven't fetched yet
+    const pubkeysToFetch = [...new Set(docs.map(d => d.senderPubkey))]
+      .filter(pk => !profiles.has(pk) && !fetching.has(pk));
+    
+    if (pubkeysToFetch.length === 0) return;
+    
+    // Mark as fetching
+    setFetchingProfiles(prev => {
+      const next = new Set(prev);
+      pubkeysToFetch.forEach(pk => next.add(pk));
+      return next;
+    });
+    
+    // Fetch profiles concurrently
+    const engine = getSyncEngine();
+    const relays = engine.getConfig().relays;
+    
+    pubkeysToFetch.forEach(async (pubkey) => {
+      try {
+        const profile = await fetchUserProfile(pubkey, relays);
+        if (profile) {
+          setSenderProfiles(prev => {
+            const next = new Map(prev);
+            next.set(pubkey, {
+              pubkey,
+              name: profile.displayName || profile.name,
+              picture: profile.picture,
+              nip05: profile.nip05,
+            });
+            return next;
+          });
+        }
+      } catch (err) {
+        console.error('Failed to fetch sender profile:', err);
+      } finally {
+        setFetchingProfiles(prev => {
+          const next = new Set(prev);
+          next.delete(pubkey);
+          return next;
+        });
+      }
+    });
+  });
+
+  // Get profile for a sender, with fallback to embedded info
+  const getSenderProfile = (doc: SharedDocument): { name?: string; picture?: string } => {
+    const cached = senderProfiles().get(doc.senderPubkey);
+    if (cached) {
+      return { name: cached.name, picture: cached.picture };
+    }
+    // Fallback to embedded sharedBy info
+    return { name: doc.data.sharedBy.name };
+  };
+
+  // Extract a clean display name from a shared document
+  // Handles cases where title might be a full path (Windows or Unix) or have extension
+  const getDisplayName = (doc: SharedDocument): string => {
+    // Try title first, fall back to path
+    let name = doc.title || doc.data.path || 'Untitled';
+    
+    // If it looks like a path (Windows or Unix), extract just the filename
+    if (name.includes('/') || name.includes('\\')) {
+      // Split on both forward and back slashes
+      const parts = name.split(/[/\\]/);
+      name = parts[parts.length - 1] || name;
+    }
+    
+    // Remove file extension if present
+    name = name.replace(/\.[^/.]+$/, '');
+    
+    return name || 'Untitled';
+  };
 
   const formatTimeAgo = (timestamp: number): string => {
     const now = Math.floor(Date.now() / 1000);
@@ -99,36 +185,45 @@ const NotificationsPanel: Component<NotificationsPanelProps> = (props) => {
         <Show when={props.sharedDocuments.length > 0}>
           <div class="notifications-list">
             <For each={props.sharedDocuments}>
-              {(doc) => (
-                <div 
-                  class={`notification-item ${doc.isRead ? 'read' : 'unread'}`}
-                  onClick={() => props.onPreview(doc)}
-                >
-                  <div class="notification-unread-dot">
-                    <Show when={!doc.isRead}>
-                      <span></span>
-                    </Show>
-                  </div>
-                  <div class="notification-avatar">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                  </div>
-                  <div class="notification-content">
-                    <div class="notification-sender">
-                      {doc.data.sharedBy.name || formatPubkey(doc.senderPubkey, 8)}
+              {(doc) => {
+                const profile = () => getSenderProfile(doc);
+                const displayName = () => getDisplayName(doc);
+                
+                return (
+                  <div 
+                    class={`notification-item ${doc.isRead ? 'read' : 'unread'}`}
+                    onClick={() => props.onPreview(doc)}
+                  >
+                    <div class="notification-unread-dot">
+                      <Show when={!doc.isRead}>
+                        <span></span>
+                      </Show>
                     </div>
-                    <div class="notification-title">{doc.title}</div>
-                    <div class="notification-time">{formatTimeAgo(doc.createdAt)}</div>
+                    <div class="notification-avatar">
+                      <Show when={sanitizeImageUrl(profile().picture)} fallback={
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                          <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                      }>
+                        <img src={sanitizeImageUrl(profile().picture)} alt="" class="notification-avatar-img" />
+                      </Show>
+                    </div>
+                    <div class="notification-content">
+                      <div class="notification-sender">
+                        {profile().name || formatPubkey(doc.senderPubkey, 8)}
+                      </div>
+                      <div class="notification-title">{displayName()}</div>
+                      <div class="notification-time">{formatTimeAgo(doc.createdAt)}</div>
+                    </div>
+                    <div class="notification-arrow">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                      </svg>
+                    </div>
                   </div>
-                  <div class="notification-arrow">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <polyline points="9 18 15 12 9 6"></polyline>
-                    </svg>
-                  </div>
-                </div>
-              )}
+                );
+              }}
             </For>
           </div>
         </Show>

@@ -17,6 +17,7 @@ import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
@@ -329,19 +330,59 @@ const App: Component = () => {
 
   // Handle importing a shared document
   const handleImportSharedDoc = async (doc: SharedDocument) => {
-    const vault = currentVault();
-    if (!vault) {
-      console.error('No vault available for import');
+    const vp = vaultPath();
+    if (!vp) {
+      console.error('No vault path available for import');
       return;
     }
 
     setIsImporting(true);
     try {
+      // Extract safe filename from the document
+      const rawFilename = doc.title || doc.data.path || 'Untitled';
+      // Get just the filename part (handle Windows and Unix paths)
+      let filename = rawFilename.split(/[/\\]/).pop() || 'Untitled';
+      // Sanitize filename
+      filename = filename
+        .replace(/[<>:"|?*\x00-\x1f]/g, '_')  // Remove invalid chars
+        .replace(/\.\./g, '_');  // Remove traversal attempts
+      // Ensure .md extension
+      if (!filename.toLowerCase().endsWith('.md')) {
+        filename += '.md';
+      }
+      
+      // Create Shared directory if it doesn't exist
+      const sharedDir = `${vp}/Shared`;
+      const dirExists = await exists(sharedDir);
+      if (!dirExists) {
+        await mkdir(sharedDir, { recursive: true });
+      }
+      
+      // Write file to local filesystem
+      const filePath = `${sharedDir}/${filename}`;
+      await writeTextFile(filePath, doc.data.content);
+      
+      // Also sync to Nostr if sync is enabled
+      const vault = currentVault();
+      if (vault) {
+        try {
+          const engine = getSyncEngine();
+          await engine.importSharedDocument(doc, vault);
+        } catch (syncErr) {
+          console.warn('Failed to sync imported document to Nostr:', syncErr);
+          // Don't fail the import if sync fails - file is saved locally
+        }
+      }
+      
+      // Mark as read
       const engine = getSyncEngine();
-      await engine.importSharedDocument(doc, vault);
+      engine.markShareAsRead(doc.eventId);
       
       // Refresh sidebar to show new file
       refreshSidebar?.();
+      
+      // Open the imported file
+      await openFile(filePath);
     } catch (err) {
       console.error('Failed to import shared document:', err);
     } finally {
@@ -369,6 +410,24 @@ const App: Component = () => {
       setSentShares(prev => prev.filter(s => s.eventId !== share.eventId));
     } catch (err) {
       console.error('Failed to revoke share:', err);
+    }
+  };
+
+  // Handle blocking a user (adds to NIP-51 mute list)
+  const handleBlockUser = async (pubkey: string) => {
+    try {
+      const engine = getSyncEngine();
+      await engine.addToMuteList(pubkey, true); // Private mute
+      engine.invalidateMuteCache();
+      
+      // Remove all shares from this user from local state
+      setSharedWithMe(prev => prev.filter(d => d.senderPubkey !== pubkey));
+      
+      // Close the preview
+      setPreviewingDoc(null);
+    } catch (err) {
+      console.error('Failed to block user:', err);
+      throw err; // Re-throw so the UI can show error state
     }
   };
 
@@ -1411,6 +1470,7 @@ const App: Component = () => {
           document={previewingDoc()!}
           onImport={handleImportSharedDoc}
           onDismiss={handleDismissSharedDoc}
+          onBlockUser={handleBlockUser}
           onClose={() => setPreviewingDoc(null)}
           isImporting={isImporting()}
         />

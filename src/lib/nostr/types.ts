@@ -9,6 +9,9 @@ export const KIND_FILE = 30800;
 export const KIND_VAULT_INDEX = 30801;
 export const KIND_SHARED_DOCUMENT = 30802;
 
+// NIP-51 Lists
+export const KIND_MUTE_LIST = 10000;
+
 // NIP-17 Direct Messages (Gift Wrapped)
 export const KIND_GIFT_WRAP = 1059;
 export const KIND_SEAL = 13;

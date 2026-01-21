@@ -12,6 +12,7 @@ import {
   KIND_FILE,
   KIND_VAULT_INDEX,
   KIND_SHARED_DOCUMENT,
+  KIND_MUTE_LIST,
   ENCRYPTION_METHOD,
   type NostrIdentity,
   type Vault,
@@ -689,9 +690,14 @@ export class SyncEngine {
 
   /**
    * Fetch documents shared with the current user
+   * Automatically filters out shares from muted users
    */
   async fetchSharedWithMe(): Promise<SharedDocument[]> {
     this.ensureIdentity();
+
+    // Fetch mute list first to filter out blocked senders
+    const { pubkeys: mutedPubkeys } = await this.fetchMuteList();
+    const mutedSet = new Set(mutedPubkeys);
 
     const events = await this.pool.querySync(
       this.config.relays,
@@ -705,6 +711,11 @@ export class SyncEngine {
     const readIds = this.getReadShareIds();
 
     for (const event of events) {
+      // Skip events from muted users
+      if (mutedSet.has(event.pubkey)) {
+        continue;
+      }
+
       try {
         // Decrypt from sender's pubkey
         const decrypted = await this.decryptFromSender(event.content, event.pubkey);
@@ -811,11 +822,82 @@ export class SyncEngine {
   ): Promise<{ file: SyncedFile; vault: Vault }> {
     this.ensureIdentity();
 
-    // Determine the target path
-    const path = targetPath || `/Shared/${this.extractFilenameFromPath(sharedDoc.data.path)}`;
+    // SECURITY: Sanitize the filename to prevent path traversal attacks
+    const safeFilename = this.sanitizeFilename(
+      this.extractFilenameFromPath(sharedDoc.data.path)
+    );
+    
+    // Determine the target path - always under /Shared/ for imported documents
+    const path = targetPath 
+      ? this.sanitizeImportPath(targetPath)
+      : `Shared/${safeFilename}`;
 
     // Use the existing publishFile method which handles all the encryption
     return this.publishFile(vault, path, sharedDoc.data.content);
+  }
+
+  /**
+   * SECURITY: Sanitize a filename to remove dangerous characters
+   */
+  private sanitizeFilename(filename: string): string {
+    if (!filename || typeof filename !== 'string') {
+      return 'untitled.md';
+    }
+    
+    let safe = filename
+      // Remove null bytes
+      .replace(/\0/g, '')
+      // Remove control characters
+      .replace(/[\x00-\x1f\x7f]/g, '')
+      // Remove Windows reserved characters
+      .replace(/[<>:"|?*]/g, '_')
+      // Remove path separators
+      .replace(/[/\\]/g, '_')
+      // Remove directory traversal
+      .replace(/\.\./g, '_');
+    
+    // Ensure it has an extension
+    if (!safe.includes('.')) {
+      safe += '.md';
+    }
+    
+    // Prevent hidden files
+    if (safe.startsWith('.')) {
+      safe = '_' + safe.slice(1);
+    }
+    
+    return safe || 'untitled.md';
+  }
+
+  /**
+   * SECURITY: Sanitize an import path to prevent directory traversal
+   */
+  private sanitizeImportPath(path: string): string {
+    if (!path || typeof path !== 'string') {
+      return 'Shared/untitled.md';
+    }
+    
+    let safe = path
+      // Normalize to forward slashes
+      .replace(/\\/g, '/')
+      // Remove null bytes
+      .replace(/\0/g, '')
+      // Remove directory traversal attempts
+      .replace(/\.\.\//g, '')
+      .replace(/\.\.\\/g, '')
+      // Remove leading slashes
+      .replace(/^\/+/, '')
+      // Remove drive letters
+      .replace(/^[a-zA-Z]:/, '')
+      // Remove control characters
+      .replace(/[\x00-\x1f\x7f]/g, '');
+    
+    // Ensure path is not empty
+    if (!safe || safe === '.' || safe === '/') {
+      return 'Shared/untitled.md';
+    }
+    
+    return safe;
   }
 
   /**
@@ -955,6 +1037,196 @@ export class SyncEngine {
   public getFileNaddr(d: string): string | null {
     if (!this.pubkey) return null;
     return this.encodeNaddr(KIND_FILE, this.pubkey, d, this.config.relays);
+  }
+
+  // ============================================
+  // NIP-51 Mute List
+  // ============================================
+
+  /**
+   * Fetch the current user's mute list (kind 10000)
+   * Returns both public and private (encrypted) muted pubkeys
+   */
+  async fetchMuteList(): Promise<{ pubkeys: string[]; raw?: Event }> {
+    this.ensureIdentity();
+
+    const events = await this.pool.querySync(
+      this.config.relays,
+      {
+        kinds: [KIND_MUTE_LIST],
+        authors: [this.pubkey!],
+      }
+    );
+
+    if (events.length === 0) {
+      return { pubkeys: [] };
+    }
+
+    // Get the most recent mute list (replaceable event)
+    const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+    const pubkeys: string[] = [];
+
+    // Extract public mutes from tags
+    for (const tag of latest.tags) {
+      if (tag[0] === 'p' && tag[1]) {
+        pubkeys.push(tag[1]);
+      }
+    }
+
+    // Decrypt private mutes from content (if any)
+    if (latest.content && this.conversationKey) {
+      try {
+        const decrypted = nip44.decrypt(latest.content, this.conversationKey);
+        const privateTags = JSON.parse(decrypted) as string[][];
+        for (const tag of privateTags) {
+          if (tag[0] === 'p' && tag[1] && !pubkeys.includes(tag[1])) {
+            pubkeys.push(tag[1]);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to decrypt private mute list:', err);
+      }
+    }
+
+    return { pubkeys, raw: latest };
+  }
+
+  /**
+   * Add a pubkey to the mute list
+   * @param pubkeyToMute - The pubkey to mute
+   * @param isPrivate - If true, encrypt the mute (hidden from others)
+   */
+  async addToMuteList(pubkeyToMute: string, isPrivate: boolean = true): Promise<void> {
+    this.ensureIdentity();
+
+    // Fetch existing mute list
+    const { pubkeys: existingPubkeys, raw: existingEvent } = await this.fetchMuteList();
+
+    // Check if already muted
+    if (existingPubkeys.includes(pubkeyToMute)) {
+      return; // Already muted
+    }
+
+    // Parse existing public and private tags
+    let publicTags: string[][] = [];
+    let privateTags: string[][] = [];
+
+    if (existingEvent) {
+      // Keep existing public tags
+      publicTags = existingEvent.tags.filter(t => t[0] === 'p');
+      
+      // Decrypt existing private tags
+      if (existingEvent.content && this.conversationKey) {
+        try {
+          const decrypted = nip44.decrypt(existingEvent.content, this.conversationKey);
+          privateTags = JSON.parse(decrypted) as string[][];
+        } catch {
+          privateTags = [];
+        }
+      }
+    }
+
+    // Add new mute
+    const newTag = ['p', pubkeyToMute];
+    if (isPrivate) {
+      privateTags.push(newTag);
+    } else {
+      publicTags.push(newTag);
+    }
+
+    // Encrypt private tags
+    let encryptedContent = '';
+    if (privateTags.length > 0 && this.conversationKey) {
+      encryptedContent = nip44.encrypt(JSON.stringify(privateTags), this.conversationKey);
+    }
+
+    // Publish updated mute list
+    const event = await this.signEvent({
+      kind: KIND_MUTE_LIST,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: publicTags,
+      content: encryptedContent,
+    });
+
+    await this.publishEvent(event);
+  }
+
+  /**
+   * Remove a pubkey from the mute list
+   */
+  async removeFromMuteList(pubkeyToUnmute: string): Promise<void> {
+    this.ensureIdentity();
+
+    // Fetch existing mute list
+    const { raw: existingEvent } = await this.fetchMuteList();
+
+    if (!existingEvent) {
+      return; // No mute list exists
+    }
+
+    // Parse existing public and private tags
+    let publicTags = existingEvent.tags.filter(t => t[0] === 'p');
+    let privateTags: string[][] = [];
+
+    // Decrypt existing private tags
+    if (existingEvent.content && this.conversationKey) {
+      try {
+        const decrypted = nip44.decrypt(existingEvent.content, this.conversationKey);
+        privateTags = JSON.parse(decrypted) as string[][];
+      } catch {
+        privateTags = [];
+      }
+    }
+
+    // Remove from both lists
+    publicTags = publicTags.filter(t => t[1] !== pubkeyToUnmute);
+    privateTags = privateTags.filter(t => t[1] !== pubkeyToUnmute);
+
+    // Encrypt private tags
+    let encryptedContent = '';
+    if (privateTags.length > 0 && this.conversationKey) {
+      encryptedContent = nip44.encrypt(JSON.stringify(privateTags), this.conversationKey);
+    }
+
+    // Publish updated mute list
+    const event = await this.signEvent({
+      kind: KIND_MUTE_LIST,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: publicTags,
+      content: encryptedContent,
+    });
+
+    await this.publishEvent(event);
+  }
+
+  /**
+   * Check if a pubkey is muted (uses cached list for performance)
+   */
+  private mutedPubkeysCache: Set<string> | null = null;
+  private mutedPubkeysCacheTime: number = 0;
+  private readonly MUTE_CACHE_TTL = 60000; // 1 minute
+
+  async isMuted(pubkey: string): Promise<boolean> {
+    // Check cache
+    const now = Date.now();
+    if (this.mutedPubkeysCache && (now - this.mutedPubkeysCacheTime) < this.MUTE_CACHE_TTL) {
+      return this.mutedPubkeysCache.has(pubkey);
+    }
+
+    // Refresh cache
+    const { pubkeys } = await this.fetchMuteList();
+    this.mutedPubkeysCache = new Set(pubkeys);
+    this.mutedPubkeysCacheTime = now;
+
+    return this.mutedPubkeysCache.has(pubkey);
+  }
+
+  /**
+   * Invalidate mute list cache (call after adding/removing mutes)
+   */
+  invalidateMuteCache(): void {
+    this.mutedPubkeysCache = null;
+    this.mutedPubkeysCacheTime = 0;
   }
 }
 

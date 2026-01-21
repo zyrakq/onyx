@@ -108,6 +108,11 @@ const Settings: Component<SettingsProps> = (props) => {
   );
   const [newBlossomUrl, setNewBlossomUrl] = createSignal('');
 
+  // Blocked users state
+  const [blockedUsers, setBlockedUsers] = createSignal<Array<{ pubkey: string; name?: string; picture?: string }>>([]);
+  const [loadingBlocked, setLoadingBlocked] = createSignal(false);
+  const [unblockingUser, setUnblockingUser] = createSignal<string | null>(null);
+
   // Sync state
   const [syncEnabled, setSyncEnabled] = createSignal(false);
   const [syncOnStartup, setSyncOnStartup] = createSignal(true);
@@ -267,6 +272,9 @@ const Settings: Component<SettingsProps> = (props) => {
       if (savedProfile) {
         setUserProfile(savedProfile);
       }
+
+      // Load blocked users list (in background, don't block UI)
+      loadBlockedUsers();
     }
 
     const savedRelays = localStorage.getItem('nostr_relays');
@@ -639,9 +647,60 @@ const Settings: Component<SettingsProps> = (props) => {
     setIdentity(null);
     setSigner(null);
     setUserProfile(null);
+    setBlockedUsers([]);
     
     // Reset to import tab
     setLoginTab('import');
+  };
+
+  // Load blocked users list
+  const loadBlockedUsers = async () => {
+    if (!currentLogin()) return;
+    
+    setLoadingBlocked(true);
+    try {
+      const engine = getSyncEngine();
+      const { pubkeys } = await engine.fetchMuteList();
+      
+      // Fetch profiles for each blocked user
+      const usersWithProfiles = await Promise.all(
+        pubkeys.map(async (pubkey) => {
+          try {
+            const profile = await fetchUserProfile(pubkey, relays().map(r => r.url));
+            return {
+              pubkey,
+              name: profile?.displayName || profile?.name,
+              picture: profile?.picture,
+            };
+          } catch {
+            return { pubkey };
+          }
+        })
+      );
+      
+      setBlockedUsers(usersWithProfiles);
+    } catch (err) {
+      console.error('Failed to load blocked users:', err);
+    } finally {
+      setLoadingBlocked(false);
+    }
+  };
+
+  // Unblock a user
+  const handleUnblockUser = async (pubkey: string) => {
+    setUnblockingUser(pubkey);
+    try {
+      const engine = getSyncEngine();
+      await engine.removeFromMuteList(pubkey);
+      engine.invalidateMuteCache();
+      
+      // Remove from local state
+      setBlockedUsers(prev => prev.filter(u => u.pubkey !== pubkey));
+    } catch (err) {
+      console.error('Failed to unblock user:', err);
+    } finally {
+      setUnblockingUser(null);
+    }
   };
 
   // Copy to clipboard
@@ -1988,6 +2047,72 @@ const Settings: Component<SettingsProps> = (props) => {
                     <button class="setting-button" onClick={handleAddBlossom}>Add</button>
                   </div>
                 </div>
+
+                <Show when={currentLogin()}>
+                  <div class="settings-section-title">Blocked Users</div>
+                  <div class="setting-item column">
+                    <div class="setting-info">
+                      <div class="setting-name">Muted accounts</div>
+                      <div class="setting-description">Users you've blocked won't be able to share documents with you (NIP-51 mute list)</div>
+                    </div>
+                    
+                    <Show when={loadingBlocked()}>
+                      <div class="blocked-users-loading">
+                        <div class="spinner small"></div>
+                        <span>Loading blocked users...</span>
+                      </div>
+                    </Show>
+
+                    <Show when={!loadingBlocked()}>
+                      <div class="blocked-users-list">
+                        <For each={blockedUsers()}>
+                          {(user) => (
+                            <div class="blocked-user-item">
+                              <div class="blocked-user-avatar">
+                                <Show when={user.picture} fallback={
+                                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                  </svg>
+                                }>
+                                  <img src={user.picture} alt="" />
+                                </Show>
+                              </div>
+                              <div class="blocked-user-info">
+                                <Show when={user.name} fallback={
+                                  <span class="blocked-user-pubkey">{user.pubkey.slice(0, 12)}...{user.pubkey.slice(-6)}</span>
+                                }>
+                                  <span class="blocked-user-name">{user.name}</span>
+                                </Show>
+                              </div>
+                              <button 
+                                class="setting-button secondary small"
+                                onClick={() => handleUnblockUser(user.pubkey)}
+                                disabled={unblockingUser() === user.pubkey}
+                              >
+                                <Show when={unblockingUser() === user.pubkey}>
+                                  <div class="spinner small"></div>
+                                </Show>
+                                <Show when={unblockingUser() !== user.pubkey}>
+                                  Unblock
+                                </Show>
+                              </button>
+                            </div>
+                          )}
+                        </For>
+                        <Show when={blockedUsers().length === 0}>
+                          <div class="blocked-users-empty">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <circle cx="12" cy="12" r="10"></circle>
+                              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                            </svg>
+                            <span>No blocked users</span>
+                          </div>
+                        </Show>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
               </div>
             </Show>
 

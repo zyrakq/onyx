@@ -2259,6 +2259,86 @@ body {
   font-style: italic;
 }
 
+/* Blocked Users List */
+.blocked-users-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.blocked-users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.blocked-user-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+}
+
+.blocked-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.blocked-user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.blocked-user-avatar svg {
+  width: 18px;
+  height: 18px;
+}
+
+.blocked-user-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.blocked-user-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.blocked-user-pubkey {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+
+.blocked-users-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.blocked-users-empty svg {
+  opacity: 0.5;
+}
+
 /* Skills List */
 .skills-loading {
   display: flex;
@@ -3890,6 +3970,13 @@ body {
   justify-content: center;
   color: var(--text-secondary);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.notification-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .notification-content {
@@ -3977,6 +4064,29 @@ body {
   gap: 6px;
 }
 
+.shared-doc-sender-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--text-secondary);
+}
+
+.shared-doc-sender-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shared-doc-sender-avatar svg {
+  width: 12px;
+  height: 12px;
+}
+
 .shared-doc-date {
   opacity: 0.8;
 }
@@ -4049,19 +4159,85 @@ body {
   font-weight: 600;
 }
 
+.shared-doc-block-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 24px;
+  background: rgba(239, 68, 68, 0.1);
+  border-top: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.block-confirm-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ef4444;
+  font-size: 13px;
+}
+
+.block-confirm-content svg {
+  flex-shrink: 0;
+}
+
+.block-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .shared-doc-footer {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   padding: 16px 24px;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
 }
 
+.shared-doc-footer-left {
+  display: flex;
+  gap: 8px;
+}
+
+.shared-doc-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
 .shared-doc-footer .setting-button {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Danger outline button for block */
+.setting-button.danger-outline {
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid #ef4444;
+}
+
+.setting-button.danger-outline:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* Danger button for confirm block */
+.setting-button.danger {
+  background: #ef4444;
+  color: white;
+  border: none;
+}
+
+.setting-button.danger:hover {
+  background: #dc2626;
+}
+
+/* Small button variant */
+.setting-button.small {
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
 /* ============================================

@@ -6,12 +6,34 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 
 ## Features
 
-- **Markdown Editor** - Write notes with syntax highlighting and live preview
-- **Local-First** - Your notes are stored locally and work offline
+### Core
+- **Markdown Editor** - Write notes with full markdown support and live preview
+- **Local-First** - Your notes are stored locally as plain markdown files and work offline
 - **Nostr Sync** - Encrypted sync across devices via Nostr relays
 - **Secure Storage** - Private keys stored in your OS keyring (Keychain, libsecret, Credential Manager)
-- **Multiple Login Options** - Import nsec, generate new keys, or use Nostr Connect (Amber, Primal)
 - **Cross-Platform** - Linux, macOS, and Windows
+
+### Document Sharing
+- **Share with Nostr Users** - Send encrypted documents to any Nostr user via npub, NIP-05, or hex pubkey
+- **Notifications Panel** - See documents shared with you, with sender profiles and timestamps
+- **Import Shared Docs** - Import received documents directly into your vault
+- **Revoke Shares** - Remove shared documents you've sent to others
+
+### Publishing
+- **Publish as Articles** - Post markdown notes as NIP-23 long-form articles
+- **Draft Support** - Publish as drafts (kind 30024) or published articles (kind 30023)
+- **Auto-generated Tags** - Suggests hashtags based on document content
+
+### Privacy & Security
+- **End-to-End Encryption** - All synced content encrypted with NIP-44
+- **Block Users** - Block bad actors using NIP-51 mute lists
+- **Secure Previews** - XSS protection and URL sanitization for shared content
+- **Private Mute Lists** - Blocked users stored encrypted so only you can see them
+
+### File Management
+- **File Info Dialog** - View local file details and Nostr sync status
+- **NIP-19 Addresses** - See naddr identifiers for synced files
+- **Sharing Status** - See who you've shared each file with
 
 ## Installation
 
@@ -92,11 +114,30 @@ npm run tauri build
 ### Nostr Sync
 
 1. Go to **Settings > Nostr**
-2. Login with your nsec or scan a QR code with Amber/Primal
+2. Login with your nsec (private key) or generate new keys
 3. Go to **Settings > Sync** and enable sync
 4. Click **Sync Now** or use the sync icon in the status bar
 
 Your notes are encrypted with NIP-44 before being published to relays. Only you can decrypt them with your private key.
+
+### Sharing Documents
+
+1. Right-click a file in the sidebar
+2. Select **Nostr > Share with user...**
+3. Enter recipient's npub, NIP-05 (user@domain.com), or hex pubkey
+4. Click **Share** to send the encrypted document
+
+The recipient will see it in their notifications panel and can import it to their vault.
+
+### Blocking Users
+
+If you receive unwanted shares, you can block users:
+
+1. Open the shared document preview
+2. Click **Block** in the footer
+3. Confirm to add them to your NIP-51 mute list
+
+Blocked users can be managed in **Settings > Nostr > Blocked Users**.
 
 ### Keyboard Shortcuts
 
@@ -110,12 +151,20 @@ Your notes are encrypted with NIP-44 before being published to relays. Only you 
 
 ## How Sync Works
 
-Onyx uses a custom Nostr event structure for encrypted file sync:
+Onyx uses custom Nostr event kinds for encrypted file sync:
 
-- **Vault Index** (kind 30801) - Encrypted list of files in your vault
-- **File Events** (kind 30800) - Individual encrypted file contents
+| Kind | Purpose | Encryption |
+|------|---------|------------|
+| 30800 | File content | NIP-44 (self) |
+| 30801 | Vault index | NIP-44 (self) |
+| 30802 | Shared documents | NIP-44 (recipient) |
+| 30023 | Published articles | None (public) |
+| 30024 | Draft articles | None (public) |
+| 10000 | Mute list | NIP-44 (self, optional) |
 
-All content is encrypted using NIP-44 with a conversation key derived from your own public/private key pair. This means only you can decrypt your notes, and relays only see encrypted blobs.
+All synced content is encrypted using NIP-44 with a conversation key derived from your own public/private key pair. This means only you can decrypt your notes, and relays only see encrypted blobs.
+
+Shared documents are encrypted to the recipient's public key, so only they can decrypt them.
 
 ## Tech Stack
 
