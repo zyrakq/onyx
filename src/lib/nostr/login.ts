@@ -12,7 +12,7 @@
 
 import { nip19, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
-import { NRelay1 } from '@nostrify/nostrify';
+import { NRelay1, NSecSigner, NConnectSigner } from '@nostrify/nostrify';
 import { invoke } from '@tauri-apps/api/core';
 import type { NostrIdentity } from './types';
 
@@ -223,7 +223,76 @@ export function buildNostrConnectUri(
 }
 
 /**
+ * Simple relay adapter for NConnectSigner
+ */
+class SimpleRelayGroup {
+  private relays: NRelay1[] = [];
+  private urls: string[];
+
+  constructor(urls: string[]) {
+    this.urls = urls;
+  }
+
+  async ensureConnected(): Promise<void> {
+    if (this.relays.length > 0) return;
+    
+    for (const url of this.urls) {
+      try {
+        const relay = new NRelay1(url);
+        this.relays.push(relay);
+      } catch {
+        // Ignore connection errors
+      }
+    }
+  }
+
+  req(filters: any[], opts?: { signal?: AbortSignal }): AsyncIterable<[string, string, any]> {
+    const self = this;
+    return {
+      async *[Symbol.asyncIterator]() {
+        await self.ensureConnected();
+        
+        // Use first connected relay
+        for (const relay of self.relays) {
+          try {
+            const sub = relay.req(filters, opts);
+            for await (const msg of sub) {
+              yield msg;
+            }
+            return;
+          } catch {
+            continue;
+          }
+        }
+      }
+    };
+  }
+
+  async event(event: any): Promise<void> {
+    await this.ensureConnected();
+    
+    for (const relay of this.relays) {
+      try {
+        await relay.event(event);
+        return;
+      } catch {
+        continue;
+      }
+    }
+    throw new Error('Failed to publish to any relay');
+  }
+
+  close(): void {
+    this.relays.forEach(r => {
+      try { r.close(); } catch { /* ignore */ }
+    });
+    this.relays = [];
+  }
+}
+
+/**
  * Connect to relays and wait for NIP-46 response
+ * Per NIP-46: After connection, we MUST call get_public_key to get the actual user pubkey
  */
 export async function waitForNostrConnect(
   params: NostrConnectParams,
@@ -291,18 +360,37 @@ export async function waitForNostrConnect(
               if (response.result === params.secret || response.result === 'ack') {
                 resolved = true;
                 clearTimeout(timeoutId);
-                cleanup();
-
-                // The event.pubkey is the bunker pubkey
-                // We need to get the actual user pubkey from the response
-                // In NIP-46, the bunker signs the initial connection
+                
+                // The event.pubkey is the bunker/remote-signer pubkey
                 const bunkerPubkey = event.pubkey;
 
-                // For now, use bunkerPubkey as user pubkey
-                // In a proper implementation, we'd do a follow-up request
-                const userPubkey = response.result === 'ack'
-                  ? bunkerPubkey
-                  : bunkerPubkey;
+                // Per NIP-46: We MUST call get_public_key to get the actual user pubkey
+                // The bunker pubkey may be different from the user pubkey
+                let userPubkey = bunkerPubkey; // Default fallback
+                
+                try {
+                  // Create a temporary NConnectSigner to get the user pubkey
+                  const clientSigner = new NSecSigner(clientSk);
+                  const relayGroup = new SimpleRelayGroup(params.relays);
+                  
+                  const tempSigner = new NConnectSigner({
+                    relay: relayGroup as any,
+                    pubkey: bunkerPubkey,
+                    signer: clientSigner,
+                    timeout: 30000, // 30 second timeout for get_public_key
+                  });
+
+                  // Call get_public_key to get the actual user pubkey
+                  userPubkey = await tempSigner.getPublicKey();
+                  
+                  // Clean up the temporary relay group
+                  relayGroup.close();
+                } catch (e) {
+                  console.warn('Failed to get user pubkey via get_public_key, using bunker pubkey:', e);
+                  // Fall back to bunker pubkey if get_public_key fails
+                }
+
+                cleanup();
 
                 const login: StoredLogin = {
                   id: generateLoginId(),

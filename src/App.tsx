@@ -274,10 +274,16 @@ const App: Component = () => {
     setIsLoadingShares(true);
     try {
       const engine = getSyncEngine();
-      const signer = getSignerFromStoredLogin();
-      if (signer) {
-        await engine.setSigner(signer);
-        
+      
+      // Only create signer if engine doesn't have one yet
+      if (!engine.getSigner()) {
+        const signer = getSignerFromStoredLogin();
+        if (signer) {
+          await engine.setSigner(signer);
+        }
+      }
+      
+      if (engine.getSigner()) {
         // Fetch documents shared with me and documents I've shared
         const [receivedDocs, sentDocs] = await Promise.all([
           engine.fetchSharedWithMe(),
@@ -763,19 +769,20 @@ const App: Component = () => {
       return;
     }
 
-    // Get signer (works for both local and bunker logins)
-    const signer = getSignerFromStoredLogin();
-    if (!signer) {
-      return;
-    }
-
     setSyncStatus('syncing');
 
     try {
       const engine = getSyncEngine();
 
-      // Set up signer for the sync engine
-      await engine.setSigner(signer);
+      // Only create signer if engine doesn't have one yet
+      if (!engine.getSigner()) {
+        const signer = getSignerFromStoredLogin();
+        if (!signer) {
+          setSyncStatus('idle');
+          return;
+        }
+        await engine.setSigner(signer);
+      }
 
       // Fetch vaults
       const vaults = await engine.fetchVaults();
