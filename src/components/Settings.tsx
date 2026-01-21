@@ -698,6 +698,14 @@ const Settings: Component<SettingsProps> = (props) => {
     setConnectUri('');
     setConnectStatus('idle');
     setQrCodeSvg('');
+    
+    // Re-initialize Nostr Connect if on connect tab (or default to it)
+    setLoginTab('connect');
+    // Use setTimeout to ensure state updates have propagated
+    setTimeout(() => {
+      initNostrConnect();
+      setTimeout(() => startNostrConnect(), 100);
+    }, 50);
   };
 
   // Initialize connect params and start listening when switching to connect tab
