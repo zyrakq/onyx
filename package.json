@@ -27,6 +27,7 @@
     "@noble/ciphers": "^2.1.1",
     "@noble/hashes": "^2.0.1",
     "@nostrify/nostrify": "^0.48.3",
+    "@opencode-ai/sdk": "^1.1.28",
     "@solidjs/router": "^0.15.4",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",

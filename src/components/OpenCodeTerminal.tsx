@@ -9,7 +9,6 @@ import '@xterm/xterm/css/xterm.css';
 
 interface OpenCodeTerminalProps {
   vaultPath: string | null;
-  onClose: () => void;
 }
 
 const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
@@ -200,21 +199,6 @@ const OpenCodeTerminal: Component<OpenCodeTerminalProps> = (props) => {
 
   return (
     <div class="opencode-terminal-panel">
-      <div class="opencode-terminal-header">
-        <span>OpenCode</span>
-        <div class="opencode-terminal-actions">
-          <Show when={!notInstalled()}>
-            <button
-              class="terminal-btn"
-              onClick={restartOpenCode}
-              title="Restart OpenCode"
-            >
-              ↻
-            </button>
-          </Show>
-          <button class="terminal-btn" onClick={props.onClose}>×</button>
-        </div>
-      </div>
       <Show when={notInstalled()}>
         <div class="opencode-not-installed">
           <div class="opencode-not-installed-icon">

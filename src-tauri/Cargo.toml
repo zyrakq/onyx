@@ -32,3 +32,6 @@ percent-encoding = "2.3"
 [target.'cfg(not(target_os = "android"))'.dependencies]
 portable-pty = "0.8"
 keyring = { version = "3", features = ["sync-secret-service", "apple-native", "windows-native"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

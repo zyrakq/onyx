@@ -4,7 +4,7 @@ import Editor from './components/Editor';
 import QuickSwitcher from './components/QuickSwitcher';
 import CommandPalette from './components/CommandPalette';
 import SearchPanel from './components/SearchPanel';
-import OpenCodeTerminal from './components/OpenCodeTerminal';
+import OpenCodePanel from './components/OpenCodePanel';
 import Settings from './components/Settings';
 import GraphView from './components/GraphView';
 import OutlinePanel from './components/OutlinePanel';
@@ -1309,14 +1309,18 @@ const App: Component = () => {
             </div>
           </Show>
 
-          {/* OpenCode Terminal Panel - Right Side */}
+          {/* OpenCode Panel - Right Side */}
           <Show when={showTerminal()}>
             <div
               class="resize-handle"
               onMouseDown={handleTerminalResizeStart}
             />
             <div style={{ width: `${terminalWidth()}px` }}>
-              <OpenCodeTerminal vaultPath={vaultPath()} onClose={() => setShowTerminal(false)} />
+              <OpenCodePanel
+                vaultPath={vaultPath()}
+                currentFile={currentTab() ? { path: currentTab()!.path, content: currentTab()!.content } : null}
+                onClose={() => setShowTerminal(false)}
+              />
             </div>
           </Show>
         </div>

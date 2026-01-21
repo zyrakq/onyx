@@ -504,6 +504,104 @@ fn run_terminal_command(command: String, cwd: Option<String>) -> Result<String, 
     Ok(format!("{}{}", stdout, stderr))
 }
 
+/// Start the OpenCode server in the background
+/// This spawns `opencode serve --port <port>` as a detached background process
+/// Works on Windows, macOS, and Linux
+#[tauri::command]
+fn start_opencode_server(command: String, cwd: Option<String>, port: u16) -> Result<(), String> {
+    use std::process::Stdio;
+
+    // Build enhanced PATH with common user binary locations (for Unix-like systems)
+    #[cfg(not(target_os = "windows"))]
+    let enhanced_path = {
+        if let Ok(home) = std::env::var("HOME") {
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            let user_paths = [
+                format!("{}/.local/bin", home),
+                format!("{}/bin", home),
+                format!("{}/.cargo/bin", home),
+                format!("{}/.opencode/bin", home),
+            ];
+            format!("{}:{}:/usr/local/bin", user_paths.join(":"), current_path)
+        } else {
+            std::env::var("PATH").unwrap_or_default()
+        }
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // On Windows, spawn the command directly with CREATE_NO_WINDOW and DETACHED_PROCESS flags
+        let mut cmd = Command::new(&command);
+        cmd.args(["serve", "--port", &port.to_string()]);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+        // CREATE_NO_WINDOW (0x08000000) | DETACHED_PROCESS (0x00000008)
+        cmd.creation_flags(0x08000008);
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn opencode: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // On macOS, spawn directly and use setsid to detach
+        let mut cmd = Command::new(&command);
+        cmd.args(["serve", "--port", &port.to_string()]);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.env("PATH", &enhanced_path);
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // On Linux, spawn directly and use setsid to detach
+        let mut cmd = Command::new(&command);
+        cmd.args(["serve", "--port", &port.to_string()]);
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        cmd.env("PATH", &enhanced_path);
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+
+        cmd.spawn()
+            .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?;
+    }
+
+    Ok(())
+}
+
 // PTY Session management (desktop only)
 #[cfg(not(target_os = "android"))]
 mod pty {
@@ -1029,6 +1127,7 @@ pub fn run() {
             search_files,
             get_file_stats,
             run_terminal_command,
+            start_opencode_server,
             pty::spawn_pty,
             pty::write_pty,
             pty::resize_pty,
