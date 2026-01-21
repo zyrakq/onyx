@@ -376,6 +376,12 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
             editorInstance = null;
           }
 
+          // Clear the container DOM to prevent duplicate content
+          // Milkdown's destroy() doesn't always clean up the DOM fully
+          if (containerRef) {
+            containerRef.innerHTML = '';
+          }
+
           // Create fresh editor with new content
           const editor = await createEditor(containerRef, props.content);
 
