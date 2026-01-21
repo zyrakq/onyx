@@ -2831,6 +2831,7 @@ body {
 
 .qr-container {
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   min-height: 220px;
@@ -2838,6 +2839,7 @@ body {
   padding: 20px;
   background: var(--bg-tertiary);
   border-radius: 12px;
+  gap: 12px;
 }
 
 .connect-waiting,

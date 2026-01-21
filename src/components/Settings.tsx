@@ -1963,7 +1963,7 @@ const Settings: Component<SettingsProps> = (props) => {
                                 <div class="qr-code" style="width: 200px; height: 200px;" innerHTML={qrCodeSvg()} />
                               </Show>
                               <Show when={connectStatus() === 'waiting'}>
-                                <p class="connect-hint" style="margin-top: 12px; color: var(--text-secondary);">Scan with your signer app</p>
+                                <p class="connect-hint">Scan with your signer app</p>
                               </Show>
                             </Show>
                             <Show when={connectStatus() === 'success'}>
