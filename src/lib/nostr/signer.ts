@@ -82,6 +82,7 @@ class NIP46WebSocket {
         this.ws.onopen = () => {
           this.isConnected = true;
           this.connectPromise = null;
+          console.log('[NIP-46] WebSocket connected:', this.url);
           resolve();
         };
 
@@ -99,6 +100,7 @@ class NIP46WebSocket {
         this.ws.onmessage = (e) => {
           try {
             const msg = JSON.parse(e.data);
+            console.log('[NIP-46] Received message:', msg[0], msg[1]);
             for (const handler of this.messageHandlers) {
               handler(msg);
             }
@@ -228,11 +230,12 @@ class RelayGroupAdapter {
           socket.addMessageHandler(messageHandler);
         }
 
-        // Add 'since' filter to avoid receiving old cached events
+        // Add 'since' filter but be generous with timing (60 seconds) 
+        // to account for clock drift between client and bunker
         const now = Math.floor(Date.now() / 1000);
         const filtersWithSince = filters.map((f: any) => ({
           ...f,
-          since: now - 5,
+          since: now - 60,
         }));
 
         // Send REQ to all connected sockets
@@ -240,6 +243,8 @@ class RelayGroupAdapter {
         for (const socket of self.sockets.values()) {
           socket.send(reqMsg);
         }
+        
+        console.log('[NIP-46] Subscribed with filters:', filtersWithSince);
 
         // Cleanup function
         const cleanup = () => {
@@ -295,6 +300,8 @@ class RelayGroupAdapter {
     const eventMsg = ['EVENT', event];
     let successes = 0;
 
+    console.log('[NIP-46] Sending event kind:', event.kind, 'to', this.sockets.size, 'relays');
+
     for (const socket of this.sockets.values()) {
       try {
         socket.send(eventMsg);
@@ -303,6 +310,8 @@ class RelayGroupAdapter {
         // Ignore send errors
       }
     }
+
+    console.log('[NIP-46] Published to', successes, 'relays');
 
     if (successes === 0) {
       throw new Error('Failed to publish to any relay');
@@ -481,10 +490,16 @@ export function createSignerFromLogin(login: LoginData): NostrSigner | null {
       const clientDecoded = nip19.decode(login.bunkerData.clientNsec);
       if (clientDecoded.type !== 'nsec') return null;
 
-      // Filter out known dead relays
-      const relays = login.bunkerData.relays.filter(
+      // Filter out known dead relays and ensure we have the bunker relay
+      const bunkerRelay = 'wss://relay.nsec.app';
+      let relays = login.bunkerData.relays.filter(
         url => !DEAD_RELAYS.includes(url)
       );
+      
+      // Always include the dedicated bunker relay for reliable NIP-46 communication
+      if (!relays.includes(bunkerRelay)) {
+        relays = [bunkerRelay, ...relays];
+      }
 
       if (relays.length === 0) {
         return null;

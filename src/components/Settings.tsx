@@ -637,8 +637,14 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // Initialize Nostr Connect
   const initNostrConnect = () => {
-    const relayUrls = relays().map(r => r.url);
-    const params = generateNostrConnectParams(relayUrls);
+    // Use a dedicated bunker relay for NIP-46 communication
+    // This is the same relay Inkwell and other apps use for reliable bunker connections
+    const bunkerRelay = 'wss://relay.nsec.app';
+    const relayUrls = [bunkerRelay, ...relays().map(r => r.url)];
+    // Remove duplicates
+    const uniqueRelays = [...new Set(relayUrls)];
+    
+    const params = generateNostrConnectParams(uniqueRelays);
     const uri = buildNostrConnectUri(params, 'Onyx');
 
     setConnectParams(params);
