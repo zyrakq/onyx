@@ -211,9 +211,21 @@ export class SyncEngine {
       }
     );
 
+    // Deduplicate by d-tag, keeping the newest event for each
+    const latestByD = new Map<string, typeof events[0]>();
+    for (const event of events) {
+      const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+      if (!dTag) continue;
+      
+      const existing = latestByD.get(dTag);
+      if (!existing || event.created_at > existing.created_at) {
+        latestByD.set(dTag, event);
+      }
+    }
+
     const vaults: Vault[] = [];
 
-    for (const event of events) {
+    for (const event of latestByD.values()) {
       try {
         const decrypted = await this.decryptContent(event.content);
         const data = JSON.parse(decrypted) as VaultIndexPayload;
@@ -231,6 +243,9 @@ export class SyncEngine {
         console.error('Failed to decrypt vault:', err);
       }
     }
+
+    // Sort by lastSync, newest first
+    vaults.sort((a, b) => (b.lastSync || 0) - (a.lastSync || 0));
 
     return vaults;
   }
@@ -654,6 +669,7 @@ export class SyncEngine {
         ['p', recipientPubkey],
         ['encrypted', ENCRYPTION_METHOD],
         ['title', title],
+        ['path', path], // Store path in tag so we can filter shares by file
       ],
       content: encryptedContent,
     });
@@ -739,17 +755,16 @@ export class SyncEngine {
         const dTag = event.tags.find(t => t[0] === 'd')?.[1];
         const pTag = event.tags.find(t => t[0] === 'p')?.[1];
         const titleTag = event.tags.find(t => t[0] === 'title')?.[1];
+        const pathTag = event.tags.find(t => t[0] === 'path')?.[1];
 
         if (dTag && pTag) {
-          // We can't decrypt our own shared docs (they're encrypted to recipient)
-          // but we have the title and recipient in tags
           sentShares.push({
             eventId: event.id,
             d: dTag,
             title: titleTag || 'Untitled',
             recipientPubkey: pTag,
             sharedAt: event.created_at,
-            path: '', // We don't have access to the encrypted path
+            path: pathTag || '',
           });
         }
       } catch (err) {

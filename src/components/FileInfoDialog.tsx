@@ -1,5 +1,6 @@
 import { Component, Show, createSignal, onMount, For } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import type { SentShare } from '../lib/nostr/types';
 
 interface LocalFileInfo {
   path: string;
@@ -20,6 +21,11 @@ interface RemoteFileInfo {
   relays: string[];
 }
 
+interface FileShareInfo {
+  shares: SentShare[];
+  recipientProfiles?: Map<string, { name?: string; picture?: string }>;
+}
+
 interface FileInfoDialogProps {
   filePath: string;
   vaultPath: string;
@@ -27,14 +33,19 @@ interface FileInfoDialogProps {
   getRemoteInfo?: () => Promise<RemoteFileInfo | null>;
   onSyncFile?: () => Promise<RemoteFileInfo | null>;
   syncEnabled?: boolean;
+  getShareInfo?: () => Promise<FileShareInfo | null>;
+  onRevokeShare?: (share: SentShare) => Promise<void>;
 }
 
 const FileInfoDialog: Component<FileInfoDialogProps> = (props) => {
   const [localInfo, setLocalInfo] = createSignal<LocalFileInfo | null>(null);
   const [remoteInfo, setRemoteInfo] = createSignal<RemoteFileInfo | null>(null);
+  const [shareInfo, setShareInfo] = createSignal<FileShareInfo | null>(null);
   const [isLoadingLocal, setIsLoadingLocal] = createSignal(true);
   const [isLoadingRemote, setIsLoadingRemote] = createSignal(true);
+  const [isLoadingShares, setIsLoadingShares] = createSignal(true);
   const [isSyncing, setIsSyncing] = createSignal(false);
+  const [isRevoking, setIsRevoking] = createSignal<string | null>(null);
   const [syncError, setSyncError] = createSignal<string | null>(null);
   const [copiedField, setCopiedField] = createSignal<string | null>(null);
 
@@ -77,7 +88,42 @@ const FileInfoDialog: Component<FileInfoDialogProps> = (props) => {
     } else {
       setIsLoadingRemote(false);
     }
+
+    // Fetch share info
+    if (props.getShareInfo) {
+      try {
+        const info = await props.getShareInfo();
+        setShareInfo(info);
+      } catch (err) {
+        console.error('Failed to get share info:', err);
+      } finally {
+        setIsLoadingShares(false);
+      }
+    } else {
+      setIsLoadingShares(false);
+    }
   });
+
+  const handleRevokeShare = async (share: SentShare) => {
+    if (!props.onRevokeShare) return;
+    
+    setIsRevoking(share.eventId);
+    try {
+      await props.onRevokeShare(share);
+      // Remove from local state
+      setShareInfo(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          shares: prev.shares.filter(s => s.eventId !== share.eventId),
+        };
+      });
+    } catch (err) {
+      console.error('Failed to revoke share:', err);
+    } finally {
+      setIsRevoking(null);
+    }
+  };
 
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -378,6 +424,100 @@ const FileInfoDialog: Component<FileInfoDialogProps> = (props) => {
               </div>
             </Show>
           </div>
+
+          {/* Sharing Section */}
+          <Show when={props.getShareInfo}>
+            <div class="file-info-divider"></div>
+
+            <div class="file-info-section">
+              <div class="file-info-section-header">
+                <div class={`file-info-section-icon share ${shareInfo()?.shares?.length ? 'shared' : 'not-shared'}`}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                    <polyline points="16 6 12 2 8 6"></polyline>
+                    <line x1="12" y1="2" x2="12" y2="15"></line>
+                  </svg>
+                </div>
+                <div class="file-info-section-title">
+                  <span>Sharing</span>
+                  <span class="file-info-section-subtitle">
+                    <Show when={isLoadingShares()}>Checking shares...</Show>
+                    <Show when={!isLoadingShares() && shareInfo()?.shares?.length}>
+                      Shared with {shareInfo()!.shares.length} {shareInfo()!.shares.length === 1 ? 'person' : 'people'}
+                    </Show>
+                    <Show when={!isLoadingShares() && !shareInfo()?.shares?.length}>Not shared</Show>
+                  </span>
+                </div>
+              </div>
+
+              <Show when={isLoadingShares()}>
+                <div class="file-info-loading">
+                  <div class="spinner small"></div>
+                  <span>Checking shares...</span>
+                </div>
+              </Show>
+
+              <Show when={!isLoadingShares() && !shareInfo()?.shares?.length}>
+                <div class="file-info-empty-state">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                    <polyline points="16 6 12 2 8 6"></polyline>
+                    <line x1="12" y1="2" x2="12" y2="15"></line>
+                  </svg>
+                  <p>This file hasn't been shared with anyone.</p>
+                </div>
+              </Show>
+
+              <Show when={!isLoadingShares() && shareInfo()?.shares?.length}>
+                <div class="file-info-shares-list">
+                  <For each={shareInfo()!.shares}>
+                    {(share) => {
+                      const profile = shareInfo()?.recipientProfiles?.get(share.recipientPubkey);
+                      return (
+                        <div class="file-info-share-item">
+                          <div class="file-info-share-avatar">
+                            <Show when={profile?.picture} fallback={
+                              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                              </svg>
+                            }>
+                              <img src={profile!.picture} alt="" />
+                            </Show>
+                          </div>
+                          <div class="file-info-share-info">
+                            <div class="file-info-share-name">
+                              {profile?.name || share.recipientName || share.recipientPubkey.slice(0, 12) + '...'}
+                            </div>
+                            <div class="file-info-share-date">
+                              Shared {formatDate(share.sharedAt)}
+                            </div>
+                          </div>
+                          <Show when={props.onRevokeShare}>
+                            <button 
+                              class="file-info-revoke-btn"
+                              onClick={() => handleRevokeShare(share)}
+                              disabled={isRevoking() === share.eventId}
+                              title="Revoke share"
+                            >
+                              <Show when={isRevoking() === share.eventId} fallback={
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                              }>
+                                <div class="spinner small"></div>
+                              </Show>
+                            </button>
+                          </Show>
+                        </div>
+                      );
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          </Show>
         </div>
 
         <div class="modal-footer">

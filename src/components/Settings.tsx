@@ -859,15 +859,23 @@ const Settings: Component<SettingsProps> = (props) => {
       let uploadedCount = 0;
       let downloadedCount = 0;
 
+      // Rate limit: delay between uploads to avoid spamming relays
+      const UPLOAD_DELAY_MS = 500; // 500ms between uploads
+      
       for (const localFile of localFiles) {
         const remoteFile = remoteFileMap.get(localFile.path);
 
         // Check if file needs to be uploaded (new or content changed)
         if (!remoteFile || remoteFile.data.content !== localFile.content) {
-          setSyncMessage(`Uploading ${localFile.path}...`);
+          setSyncMessage(`Uploading ${localFile.path}... (${uploadedCount + 1} files)`);
           const result = await engine.publishFile(vault, localFile.path, localFile.content, remoteFile);
           vault = result.vault; // Update vault with new file index
           uploadedCount++;
+          
+          // Add delay between uploads to avoid rate limiting
+          if (uploadedCount > 0) {
+            await new Promise(resolve => setTimeout(resolve, UPLOAD_DELAY_MS));
+          }
         }
 
         // Remove from map so we know what's left (remote-only files)

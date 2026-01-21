@@ -8,6 +8,7 @@
 import { Component, createSignal, createEffect, Show } from 'solid-js';
 import { parseRecipientInput, formatPubkey } from '../lib/nostr/nip05';
 import { getSyncEngine } from '../lib/nostr/sync';
+import { fetchUserProfile } from '../lib/nostr/login';
 import type { NostrProfile } from '../lib/nostr/types';
 
 interface ShareDialogProps {
@@ -62,11 +63,26 @@ const ShareDialog: Component<ShareDialogProps> = (props) => {
         
         if (result.pubkey) {
           setRecipientPubkey(result.pubkey);
-          // TODO: Fetch profile from relays for better UX
+          
+          // Set initial profile with pubkey
           setRecipientProfile({
             pubkey: result.pubkey,
             name: result.type === 'nip05' ? input : undefined,
           });
+          
+          // Fetch full profile from relays
+          const engine = getSyncEngine();
+          const relays = engine.getConfig().relays;
+          const profile = await fetchUserProfile(result.pubkey, relays);
+          
+          if (profile) {
+            setRecipientProfile({
+              pubkey: result.pubkey,
+              name: profile.displayName || profile.name,
+              picture: profile.picture,
+              nip05: profile.nip05,
+            });
+          }
         } else {
           setValidationError(result.error || 'Invalid recipient');
         }

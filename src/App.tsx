@@ -373,13 +373,16 @@ const App: Component = () => {
   };
 
   // Handle sharing a file
-  const handleShareFile = (path: string, content: string) => {
+  const handleShareFile = (fullPath: string, content: string) => {
     // Extract title from path
-    const parts = path.split('/');
+    const parts = fullPath.split('/');
     const filename = parts[parts.length - 1] || 'Untitled';
     const title = filename.replace(/\.[^/.]+$/, '');
     
-    setShareTarget({ path, content, title });
+    // Use relative path for sharing (strip vault path)
+    const relativePath = vaultPath() ? fullPath.replace(vaultPath()! + '/', '') : fullPath;
+    
+    setShareTarget({ path: relativePath, content, title });
     setShowShareDialog(true);
   };
 
@@ -1436,28 +1439,27 @@ const App: Component = () => {
             if (!vaultPath()) return null;
             
             try {
+              // Ensure signer is set
+              let signer = engine.getSigner();
+              if (!signer) {
+                const storedSigner = await getSignerFromStoredLogin();
+                if (storedSigner) {
+                  await engine.setSigner(storedSigner);
+                  signer = storedSigner;
+                } else {
+                  return null;
+                }
+              }
+              
               // Get the relative path
               const filePath = showFileInfo()!;
               const relativePath = filePath.replace(vaultPath()! + '/', '');
               
-              // Use cached vault first, fetch if not available
-              let vault = currentVault();
-              if (!vault) {
-                const signer = engine.getSigner();
-                if (!signer) {
-                  // Try to get signer from storage
-                  const storedSigner = await getSignerFromStoredLogin();
-                  if (storedSigner) {
-                    await engine.setSigner(storedSigner);
-                  } else {
-                    return null;
-                  }
-                }
-                const vaults = await engine.fetchVaults();
-                vault = vaults[0];
-                if (vault) {
-                  setCurrentVault(vault);
-                }
+              // Always fetch fresh vault data to ensure accuracy
+              const vaults = await engine.fetchVaults();
+              const vault = vaults[0];
+              if (vault) {
+                setCurrentVault(vault);
               }
               
               if (!vault) return null;
@@ -1534,6 +1536,39 @@ const App: Component = () => {
               naddr,
               relays: engine.getConfig().relays,
             };
+          }}
+          getShareInfo={async () => {
+            const filePath = showFileInfo()!;
+            const relativePath = filePath.replace(vaultPath()! + '/', '');
+            
+            // Filter sent shares for this file
+            const fileShares = sentShares().filter(s => s.path === relativePath);
+            if (fileShares.length === 0) return { shares: [] };
+            
+            // Fetch profiles for recipients
+            const engine = getSyncEngine();
+            const relays = engine.getConfig().relays;
+            const { fetchUserProfile } = await import('./lib/nostr/login');
+            
+            const recipientProfiles = new Map<string, { name?: string; picture?: string }>();
+            for (const share of fileShares) {
+              try {
+                const profile = await fetchUserProfile(share.recipientPubkey, relays);
+                if (profile) {
+                  recipientProfiles.set(share.recipientPubkey, {
+                    name: profile.displayName || profile.name,
+                    picture: profile.picture,
+                  });
+                }
+              } catch (err) {
+                console.error('Failed to fetch profile:', err);
+              }
+            }
+            
+            return { shares: fileShares, recipientProfiles };
+          }}
+          onRevokeShare={async (share) => {
+            await handleRevokeShare(share);
           }}
         />
       </Show>
