@@ -1432,37 +1432,49 @@ const App: Component = () => {
           syncEnabled={syncStatus() !== 'off'}
           getRemoteInfo={async () => {
             const engine = getSyncEngine();
-            const signer = engine.getSigner();
-            if (!signer || !vaultPath()) return null;
+            if (!vaultPath()) return null;
             
             try {
-              // Fetch vaults to find the file
-              const vaults = await engine.fetchVaults();
-              const vault = vaults[0];
-              if (!vault) return null;
-              
               // Get the relative path
               const filePath = showFileInfo()!;
               const relativePath = filePath.replace(vaultPath()! + '/', '');
+              
+              // Use cached vault first, fetch if not available
+              let vault = currentVault();
+              if (!vault) {
+                const signer = engine.getSigner();
+                if (!signer) {
+                  // Try to get signer from storage
+                  const storedSigner = await getSignerFromStoredLogin();
+                  if (storedSigner) {
+                    await engine.setSigner(storedSigner);
+                  } else {
+                    return null;
+                  }
+                }
+                const vaults = await engine.fetchVaults();
+                vault = vaults[0];
+                if (vault) {
+                  setCurrentVault(vault);
+                }
+              }
+              
+              if (!vault) return null;
               
               // Look for the file in the vault's file index
               const fileEntry = vault.data.files?.find(f => f.path === relativePath);
               if (!fileEntry) return null;
               
-              // Fetch the actual file event to get full details
-              const files = await engine.fetchVaultFiles(vault);
-              const syncedFile = files.find(f => f.data.path === relativePath);
-              if (!syncedFile) return null;
-              
-              // Generate naddr
-              const naddr = engine.getFileNaddr(syncedFile.d) || '';
+              // We have the file entry in the index, use that info
+              // Generate naddr from the d-tag
+              const naddr = engine.getFileNaddr(fileEntry.d) || '';
               
               return {
-                eventId: syncedFile.eventId,
-                d: syncedFile.d,
-                checksum: syncedFile.data.checksum,
-                version: syncedFile.data.version,
-                modified: syncedFile.data.modified,
+                eventId: fileEntry.eventId,
+                d: fileEntry.d,
+                checksum: fileEntry.checksum,
+                version: fileEntry.version,
+                modified: fileEntry.modified,
                 naddr,
                 relays: engine.getConfig().relays,
               };
@@ -1473,19 +1485,28 @@ const App: Component = () => {
           }}
           onSyncFile={async () => {
             const engine = getSyncEngine();
-            const signer = engine.getSigner();
+            let signer = engine.getSigner();
             if (!signer) {
-              throw new Error('Not logged in. Please log in to sync files.');
+              // Try to get signer from storage
+              signer = await getSignerFromStoredLogin();
+              if (signer) {
+                await engine.setSigner(signer);
+              } else {
+                throw new Error('Not logged in. Please log in to sync files.');
+              }
             }
             if (!vaultPath()) {
               throw new Error('No vault selected.');
             }
             
-            // Get or create vault
-            const vaults = await engine.fetchVaults();
-            let vault = vaults[0];
+            // Get or create vault, use cached if available
+            let vault = currentVault();
             if (!vault) {
-              vault = await engine.createVault('My Notes', 'Default vault');
+              const vaults = await engine.fetchVaults();
+              vault = vaults[0];
+              if (!vault) {
+                vault = await engine.createVault('My Notes', 'Default vault');
+              }
             }
             
             // Read the file content
@@ -1495,6 +1516,9 @@ const App: Component = () => {
             
             // Publish the file
             const result = await engine.publishFile(vault, relativePath, content);
+            
+            // Update cached vault with the new file
+            setCurrentVault(result.vault);
             
             // Generate naddr for the synced file
             const naddr = engine.getFileNaddr(result.file.d) || '';
