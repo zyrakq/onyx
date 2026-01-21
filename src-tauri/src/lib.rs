@@ -677,6 +677,428 @@ fn is_opencode_server_managed(state: tauri::State<'_, SharedOpenCodeServerState>
     }
 }
 
+// OpenCode Installer Module
+mod opencode_installer {
+    use super::*;
+    use futures_util::StreamExt;
+    use std::io::Write;
+    use tauri::Emitter;
+
+    /// Progress payload for install events
+    #[derive(Clone, Serialize)]
+    pub struct InstallProgress {
+        pub stage: String,
+        pub progress: u32,
+        pub bytes_downloaded: Option<u64>,
+        pub total_bytes: Option<u64>,
+        pub message: String,
+    }
+
+    /// Get the default install path for OpenCode based on the current platform
+    fn get_default_install_dir() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(appdata) = dirs::data_dir() {
+                appdata.join("opencode").join("bin")
+            } else {
+                PathBuf::from("C:\\opencode\\bin")
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                PathBuf::from(home).join(".opencode").join("bin")
+            } else {
+                PathBuf::from("/usr/local/bin")
+            }
+        }
+    }
+
+    /// Get the full path to the opencode binary
+    fn get_opencode_binary_path() -> PathBuf {
+        let dir = get_default_install_dir();
+        #[cfg(target_os = "windows")]
+        {
+            dir.join("opencode.exe")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            dir.join("opencode")
+        }
+    }
+
+    /// Check common locations for OpenCode binary
+    fn find_opencode_in_path() -> Option<PathBuf> {
+        // Check if 'which' or 'where' can find it
+        #[cfg(target_os = "windows")]
+        let result = Command::new("where").arg("opencode").output();
+        #[cfg(not(target_os = "windows"))]
+        let result = Command::new("which").arg("opencode").output();
+
+        if let Ok(output) = result {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout);
+                let path = path_str.lines().next()?.trim();
+                if !path.is_empty() {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if OpenCode is installed and return its path
+    #[tauri::command]
+    pub fn check_opencode_installed() -> Option<String> {
+        // First check our default install location
+        let default_path = get_opencode_binary_path();
+        if default_path.exists() {
+            return Some(default_path.to_string_lossy().to_string());
+        }
+
+        // Check common locations
+        let common_paths: Vec<PathBuf> = {
+            #[cfg(target_os = "windows")]
+            {
+                vec![
+                    PathBuf::from("C:\\Program Files\\opencode\\opencode.exe"),
+                    PathBuf::from("C:\\opencode\\opencode.exe"),
+                ]
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let home = std::env::var("HOME").unwrap_or_default();
+                vec![
+                    PathBuf::from(&home).join(".local/bin/opencode"),
+                    PathBuf::from(&home).join("bin/opencode"),
+                    PathBuf::from("/usr/local/bin/opencode"),
+                    PathBuf::from("/usr/bin/opencode"),
+                ]
+            }
+        };
+
+        for path in common_paths {
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+
+        // Try to find in PATH
+        if let Some(path) = find_opencode_in_path() {
+            return Some(path.to_string_lossy().to_string());
+        }
+
+        None
+    }
+
+    /// Get the recommended install path for OpenCode
+    #[tauri::command]
+    pub fn get_opencode_install_path() -> String {
+        get_opencode_binary_path().to_string_lossy().to_string()
+    }
+
+    /// Get the download URL for the current platform
+    fn get_download_url() -> Result<String, String> {
+        let base_url = "https://github.com/anomalyco/opencode/releases/latest/download";
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let asset = "opencode-darwin-arm64.zip";
+
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        let asset = "opencode-darwin-x64.zip";
+
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        let asset = "opencode-windows-x64.zip";
+
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let asset = "opencode-linux-x64.tar.gz";
+
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        let asset = "opencode-linux-arm64.tar.gz";
+
+        #[cfg(not(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+        )))]
+        return Err("Unsupported platform".to_string());
+
+        Ok(format!("{}/{}", base_url, asset))
+    }
+
+    /// Extract a .tar.gz archive
+    #[cfg(not(target_os = "windows"))]
+    fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
+        use flate2::read::GzDecoder;
+        use tar::Archive;
+
+        let file = fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {}", e))?;
+        let decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(decoder);
+
+        // Extract to destination
+        archive
+            .unpack(dest_dir)
+            .map_err(|e| format!("Failed to extract archive: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Extract a .zip archive
+    fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
+        let file = fs::File::open(archive_path).map_err(|e| format!("Failed to open archive: {}", e))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip: {}", e))?;
+
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+
+            let outpath = match file.enclosed_name() {
+                Some(path) => dest_dir.join(path),
+                None => continue,
+            };
+
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&outpath).map_err(|e| format!("Failed to create directory: {}", e))?;
+            } else {
+                if let Some(parent) = outpath.parent() {
+                    if !parent.exists() {
+                        fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create directory: {}", e))?;
+                    }
+                }
+                let mut outfile = fs::File::create(&outpath)
+                    .map_err(|e| format!("Failed to create file: {}", e))?;
+                std::io::copy(&mut file, &mut outfile)
+                    .map_err(|e| format!("Failed to write file: {}", e))?;
+            }
+
+            // Set executable permissions on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = file.unix_mode() {
+                    fs::set_permissions(&outpath, fs::Permissions::from_mode(mode)).ok();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Download and install OpenCode
+    #[tauri::command]
+    pub async fn install_opencode(app: AppHandle) -> Result<String, String> {
+        let download_url = get_download_url()?;
+        let install_dir = get_default_install_dir();
+        let binary_path = get_opencode_binary_path();
+
+        // Emit starting
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "checking".to_string(),
+                progress: 0,
+                bytes_downloaded: None,
+                total_bytes: None,
+                message: "Preparing installation...".to_string(),
+            },
+        );
+
+        // Create install directory
+        fs::create_dir_all(&install_dir)
+            .map_err(|e| format!("Failed to create install directory: {}", e))?;
+
+        // Create temp file for download
+        let temp_dir = std::env::temp_dir();
+        let archive_name = download_url.split('/').last().unwrap_or("opencode.archive");
+        let archive_path = temp_dir.join(archive_name);
+
+        // Download the archive
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "downloading".to_string(),
+                progress: 0,
+                bytes_downloaded: Some(0),
+                total_bytes: None,
+                message: format!("Connecting to GitHub..."),
+            },
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Download failed with status: {}", response.status()));
+        }
+
+        let total_size = response.content_length();
+        let mut downloaded: u64 = 0;
+        let mut file = fs::File::create(&archive_path)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("Download error: {}", e))?;
+            file.write_all(&chunk)
+                .map_err(|e| format!("Failed to write: {}", e))?;
+            downloaded += chunk.len() as u64;
+
+            let progress = if let Some(total) = total_size {
+                ((downloaded as f64 / total as f64) * 100.0) as u32
+            } else {
+                0
+            };
+
+            let message = if let Some(total) = total_size {
+                format!(
+                    "Downloading... {:.1} MB / {:.1} MB",
+                    downloaded as f64 / 1_000_000.0,
+                    total as f64 / 1_000_000.0
+                )
+            } else {
+                format!("Downloading... {:.1} MB", downloaded as f64 / 1_000_000.0)
+            };
+
+            let _ = app.emit(
+                "opencode-install-progress",
+                InstallProgress {
+                    stage: "downloading".to_string(),
+                    progress,
+                    bytes_downloaded: Some(downloaded),
+                    total_bytes: total_size,
+                    message,
+                },
+            );
+        }
+
+        drop(file);
+
+        // Extract the archive
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "extracting".to_string(),
+                progress: 80,
+                bytes_downloaded: None,
+                total_bytes: None,
+                message: "Extracting OpenCode...".to_string(),
+            },
+        );
+
+        // Create a temp extraction directory
+        let extract_dir = temp_dir.join("opencode_extract");
+        if extract_dir.exists() {
+            let _ = fs::remove_dir_all(&extract_dir);
+        }
+        fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("Failed to create extract directory: {}", e))?;
+
+        // Extract based on archive type
+        if archive_name.ends_with(".tar.gz") {
+            #[cfg(not(target_os = "windows"))]
+            extract_tar_gz(&archive_path, &extract_dir)?;
+            #[cfg(target_os = "windows")]
+            return Err("tar.gz extraction not supported on Windows".to_string());
+        } else if archive_name.ends_with(".zip") {
+            extract_zip(&archive_path, &extract_dir)?;
+        } else {
+            return Err("Unknown archive format".to_string());
+        }
+
+        // Find the opencode binary in the extracted files
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "configuring".to_string(),
+                progress: 90,
+                bytes_downloaded: None,
+                total_bytes: None,
+                message: "Installing OpenCode...".to_string(),
+            },
+        );
+
+        // Look for the opencode binary
+        #[cfg(target_os = "windows")]
+        let binary_name = "opencode.exe";
+        #[cfg(not(target_os = "windows"))]
+        let binary_name = "opencode";
+
+        let mut found_binary: Option<PathBuf> = None;
+        for entry in WalkDir::new(&extract_dir).max_depth(3) {
+            if let Ok(entry) = entry {
+                if entry.file_name().to_string_lossy() == binary_name {
+                    found_binary = Some(entry.path().to_path_buf());
+                    break;
+                }
+            }
+        }
+
+        let source_binary = found_binary.ok_or("OpenCode binary not found in archive")?;
+
+        // Copy to install location
+        fs::copy(&source_binary, &binary_path)
+            .map_err(|e| format!("Failed to install binary: {}", e))?;
+
+        // Make executable on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&binary_path, fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("Failed to set permissions: {}", e))?;
+        }
+
+        // Clean up temp files
+        let _ = fs::remove_file(&archive_path);
+        let _ = fs::remove_dir_all(&extract_dir);
+
+        // Emit completion
+        let _ = app.emit(
+            "opencode-install-progress",
+            InstallProgress {
+                stage: "complete".to_string(),
+                progress: 100,
+                bytes_downloaded: None,
+                total_bytes: None,
+                message: "OpenCode installed successfully!".to_string(),
+            },
+        );
+
+        Ok(binary_path.to_string_lossy().to_string())
+    }
+
+    /// Get the currently installed OpenCode version
+    #[tauri::command]
+    pub fn get_opencode_version() -> Result<String, String> {
+        let binary_path = if let Some(path) = check_opencode_installed() {
+            path
+        } else {
+            return Err("OpenCode not installed".to_string());
+        };
+
+        let output = Command::new(&binary_path)
+            .arg("--version")
+            .output()
+            .map_err(|e| format!("Failed to get version: {}", e))?;
+
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(version)
+        } else {
+            Err("Failed to get version".to_string())
+        }
+    }
+}
+
 // PTY Session management (desktop only)
 #[cfg(not(target_os = "android"))]
 mod pty {
@@ -1240,6 +1662,10 @@ pub fn run() {
             skill_list_installed,
             skill_read_file,
             get_platform_info,
+            opencode_installer::check_opencode_installed,
+            opencode_installer::get_opencode_install_path,
+            opencode_installer::install_opencode,
+            opencode_installer::get_opencode_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,6 +4,7 @@
 
 import { Component, createSignal, createEffect, onMount, onCleanup, For, Show } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-shell';
 import {
   initClient,
@@ -20,6 +21,15 @@ import {
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
 import { sanitizeImageUrl } from '../lib/security';
+
+// Install progress payload from Rust backend
+interface InstallProgress {
+  stage: 'checking' | 'downloading' | 'extracting' | 'configuring' | 'complete' | 'error';
+  progress: number;
+  bytes_downloaded?: number;
+  total_bytes?: number;
+  message: string;
+}
 
 /**
  * Convert markdown to HTML for chat display
@@ -98,6 +108,11 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const [userProfile, setUserProfile] = createSignal<UserProfile | null>(null);
   const [currentModel, setCurrentModel] = createSignal<string | null>(null);
   
+  // Installer state
+  const [isInstalling, setIsInstalling] = createSignal(false);
+  const [installProgress, setInstallProgress] = createSignal<InstallProgress | null>(null);
+  const [installError, setInstallError] = createSignal<string | null>(null);
+  
   // Format model name for display (e.g., "anthropic/claude-3-5-sonnet" -> "Claude 3.5 Sonnet")
   const displayModelName = () => {
     const model = currentModel();
@@ -131,6 +146,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   // Check server status and start if needed
   const checkAndStartServer = async () => {
     setServerStatus('checking');
+    // Clear any previous install errors when retrying
+    setInstallError(null);
     
     try {
       initClient();
@@ -140,12 +157,43 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
         setServerStatus('running');
         await initializeSession();
       } else {
-        setServerStatus('starting');
-        await startOpenCodeServer();
+        // Check if OpenCode is installed (including auto-detection)
+        let opencodePath = localStorage.getItem('opencode_path');
+        
+        if (!opencodePath) {
+          // Try to auto-detect OpenCode installation
+          try {
+            const detectedPath = await invoke<string | null>('check_opencode_installed');
+            if (detectedPath) {
+              opencodePath = detectedPath;
+              localStorage.setItem('opencode_path', detectedPath);
+              console.log('[OpenCodeChat] Auto-detected OpenCode at:', detectedPath);
+            }
+          } catch (err) {
+            console.log('[OpenCodeChat] Could not auto-detect OpenCode:', err);
+          }
+        }
+        
+        if (opencodePath || await commandExists('opencode')) {
+          setServerStatus('starting');
+          await startOpenCodeServer();
+        } else {
+          setServerStatus('not-installed');
+        }
       }
     } catch (err) {
       console.error('[OpenCodeChat] Failed to check server status:', err);
       setServerStatus('not-installed');
+    }
+  };
+  
+  // Check if a command exists in PATH
+  const commandExists = async (_cmd: string): Promise<boolean> => {
+    try {
+      const result = await invoke<string | null>('check_opencode_installed');
+      return result !== null;
+    } catch {
+      return false;
     }
   };
 
@@ -492,6 +540,58 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     }
   };
 
+  // Install OpenCode automatically
+  const handleInstallOpenCode = async () => {
+    setIsInstalling(true);
+    setInstallError(null);
+    setInstallProgress({
+      stage: 'checking',
+      progress: 0,
+      message: 'Preparing installation...'
+    });
+
+    // Listen for progress events
+    const unlisten = await listen<InstallProgress>('opencode-install-progress', (event) => {
+      setInstallProgress(event.payload);
+      
+      if (event.payload.stage === 'error') {
+        setInstallError(event.payload.message);
+        setIsInstalling(false);
+      }
+    });
+
+    try {
+      const installedPath = await invoke<string>('install_opencode');
+      
+      // Save the path to localStorage
+      localStorage.setItem('opencode_path', installedPath);
+      
+      // Clean up listener
+      unlisten();
+      
+      // Wait a moment then try to connect
+      setInstallProgress({
+        stage: 'complete',
+        progress: 100,
+        message: 'OpenCode installed successfully! Starting server...'
+      });
+      
+      // Brief delay to show success message
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      setIsInstalling(false);
+      setInstallProgress(null);
+      
+      // Try to start the server
+      checkAndStartServer();
+    } catch (err) {
+      console.error('Failed to install OpenCode:', err);
+      unlisten();
+      setInstallError(err instanceof Error ? err.message : String(err));
+      setIsInstalling(false);
+    }
+  };
+
   onMount(async () => {
     // Load user profile if logged in
     const login = await getCurrentLogin();
@@ -571,32 +671,112 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       {/* Not Installed State */}
       <Show when={serverStatus() === 'not-installed'}>
         <div class="opencode-chat-empty">
-          <div class="opencode-not-installed-icon">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-              <polyline points="7.5 4.21 12 6.81 16.5 4.21"></polyline>
-              <polyline points="7.5 19.79 7.5 14.6 3 12"></polyline>
-              <polyline points="21 12 16.5 14.6 16.5 19.79"></polyline>
-              <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-              <line x1="12" y1="22.08" x2="12" y2="12"></line>
-            </svg>
-          </div>
-          <h3>OpenCode Not Installed</h3>
-          <p>OpenCode is an AI coding assistant that helps you write and edit code directly in your vault.</p>
-          <button
-            class="opencode-install-btn"
-            onClick={() => open('https://opencode.ai/download')}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            Download OpenCode
-          </button>
-          <button class="opencode-retry-btn" onClick={checkAndStartServer}>
-            I've installed it - try again
-          </button>
+          {/* Installing State */}
+          <Show when={isInstalling()}>
+            <div class="opencode-installer">
+              <div class="opencode-installer-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+              </div>
+              <h3>Installing OpenCode</h3>
+              
+              {/* Progress bar */}
+              <div class="opencode-install-progress">
+                <div 
+                  class="opencode-install-progress-bar" 
+                  style={{ width: `${installProgress()?.progress || 0}%` }}
+                />
+              </div>
+              
+              {/* Status message */}
+              <p class="opencode-install-status">
+                {installProgress()?.message || 'Preparing...'}
+              </p>
+              
+              {/* Download details */}
+              <Show when={installProgress()?.bytes_downloaded && installProgress()?.total_bytes}>
+                <p class="opencode-install-details">
+                  {((installProgress()?.bytes_downloaded || 0) / 1_000_000).toFixed(1)} MB / 
+                  {((installProgress()?.total_bytes || 0) / 1_000_000).toFixed(1)} MB
+                </p>
+              </Show>
+            </div>
+          </Show>
+
+          {/* Install Error State */}
+          <Show when={!isInstalling() && installError()}>
+            <div class="opencode-not-installed-icon error">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="15" y1="9" x2="9" y2="15"></line>
+                <line x1="9" y1="9" x2="15" y2="15"></line>
+              </svg>
+            </div>
+            <h3>Installation Failed</h3>
+            <p class="error-message">{installError()}</p>
+            <button
+              class="opencode-install-btn"
+              onClick={handleInstallOpenCode}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+              Try Again
+            </button>
+            <button
+              class="opencode-manual-btn"
+              onClick={() => open('https://opencode.ai/download')}
+            >
+              Install Manually
+            </button>
+          </Show>
+
+          {/* Default Not Installed State */}
+          <Show when={!isInstalling() && !installError()}>
+            <div class="opencode-not-installed-icon">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                <polyline points="7.5 4.21 12 6.81 16.5 4.21"></polyline>
+                <polyline points="7.5 19.79 7.5 14.6 3 12"></polyline>
+                <polyline points="21 12 16.5 14.6 16.5 19.79"></polyline>
+                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                <line x1="12" y1="22.08" x2="12" y2="12"></line>
+              </svg>
+            </div>
+            <h3>OpenCode Not Found</h3>
+            <p>OpenCode is an AI coding assistant that powers the chat features in Onyx.</p>
+            
+            <button
+              class="opencode-install-btn primary"
+              onClick={handleInstallOpenCode}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Install OpenCode Automatically
+            </button>
+            <p class="opencode-install-hint">Downloads ~30-50 MB to ~/.opencode/bin/</p>
+            
+            <div class="opencode-install-divider">
+              <span>or</span>
+            </div>
+            
+            <button
+              class="opencode-manual-btn"
+              onClick={() => open('https://opencode.ai/download')}
+            >
+              Download Manually
+            </button>
+            <button class="opencode-retry-btn" onClick={checkAndStartServer}>
+              Already installed? Check again
+            </button>
+          </Show>
         </div>
       </Show>
 

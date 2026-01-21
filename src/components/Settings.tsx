@@ -149,6 +149,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
   // OpenCode settings
   const [openCodePath, setOpenCodePath] = createSignal<string>('');
+  const [openCodeDetectedPath, setOpenCodeDetectedPath] = createSignal<string | null>(null);
   const [openCodeProviders, setOpenCodeProviders] = createSignal<ProviderInfo[]>([]);
   const [openCodeModel, setOpenCodeModel] = createSignal<string | null>(null);
   const [openCodeLoading, setOpenCodeLoading] = createSignal(false);
@@ -1051,6 +1052,22 @@ const Settings: Component<SettingsProps> = (props) => {
     setOpenCodeLoading(true);
     setOpenCodeError(null);
     try {
+      // Try to auto-detect OpenCode installation
+      try {
+        const detectedPath = await invoke<string | null>('check_opencode_installed');
+        setOpenCodeDetectedPath(detectedPath);
+        
+        // If we detected a path and user hasn't set a custom one, use the detected path
+        const savedPath = localStorage.getItem('opencode_path');
+        if (detectedPath && !savedPath) {
+          setOpenCodePath(detectedPath);
+          localStorage.setItem('opencode_path', detectedPath);
+        }
+      } catch (err) {
+        console.log('Could not auto-detect OpenCode:', err);
+        setOpenCodeDetectedPath(null);
+      }
+      
       initClient();
       const running = await isServerRunning();
       setOpenCodeServerRunning(running);
@@ -1762,12 +1779,37 @@ const Settings: Component<SettingsProps> = (props) => {
                   </div>
                 </div>
 
+                {/* Show auto-detected path info */}
+                <Show when={openCodeDetectedPath()}>
+                  <div class="settings-notice success">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    <div>
+                      <p><strong>OpenCode detected</strong></p>
+                      <p class="detected-path">{openCodeDetectedPath()}</p>
+                    </div>
+                  </div>
+                </Show>
+
+                <Show when={!openCodeDetectedPath() && !openCodePath()}>
+                  <div class="settings-notice warning">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <line x1="12" y1="8" x2="12" y2="12"></line>
+                      <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>OpenCode not found. Use the OpenCode panel to install it automatically, or specify the path below.</p>
+                  </div>
+                </Show>
+
                 <div class="setting-item column">
                   <div class="opencode-path-input">
                     <input
                       type="text"
                       class="setting-input wide"
-                      placeholder="e.g., C:\Program Files\OpenCode\opencode.exe or /usr/local/bin/opencode"
+                      placeholder={openCodeDetectedPath() || "e.g., /usr/local/bin/opencode"}
                       value={openCodePath()}
                       onInput={(e) => handleOpenCodePathChange(e.currentTarget.value)}
                     />
@@ -1778,7 +1820,7 @@ const Settings: Component<SettingsProps> = (props) => {
                       Browse
                     </button>
                     <Show when={openCodePath()}>
-                      <button class="setting-button secondary" onClick={handleClearOpenCodePath} title="Clear path">
+                      <button class="setting-button secondary" onClick={handleClearOpenCodePath} title="Clear path and use auto-detected">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                           <line x1="18" y1="6" x2="6" y2="18"></line>
                           <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -1786,16 +1828,10 @@ const Settings: Component<SettingsProps> = (props) => {
                       </button>
                     </Show>
                   </div>
+                  <Show when={openCodePath() && openCodePath() !== openCodeDetectedPath()}>
+                    <p class="setting-hint">Custom path overrides auto-detected location</p>
+                  </Show>
                 </div>
-
-                <Show when={openCodePath()}>
-                  <div class="setting-item">
-                    <div class="setting-info">
-                      <div class="setting-name">Current path</div>
-                      <div class="setting-description opencode-current-path">{openCodePath()}</div>
-                    </div>
-                  </div>
-                </Show>
 
                 <div class="settings-section-title">Installation</div>
                 <div class="setting-item">
