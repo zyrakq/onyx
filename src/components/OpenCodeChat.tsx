@@ -114,7 +114,19 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const [installError, setInstallError] = createSignal<string | null>(null);
   
   // Track if we've already sent context for the current file in this session
+  // We track both the path and a hash of the content so we re-send if the file changed
   const [contextSentForFile, setContextSentForFile] = createSignal<string | null>(null);
+  
+  // Simple hash function for detecting content changes
+  const hashContent = (content: string): string => {
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+      const char = content.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return hash.toString(16);
+  };
   
   // Format model name for display (e.g., "anthropic/claude-3-5-sonnet" -> "Claude 3.5 Sonnet")
   const displayModelName = () => {
@@ -466,10 +478,30 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       
       // Include file context only on first message for this file (or if file changed)
       // This avoids sending the full file content with every message
-      if (file && includeContext() && contextSentForFile() !== file.path) {
+      // We use path + content hash to detect if the file was edited
+      const fileKey = file ? `${file.path}:${hashContent(file.content)}` : null;
+      if (file && includeContext() && contextSentForFile() !== fileKey) {
         const filename = file.path.split('/').pop() || file.path;
-        prompt = `[Context: Working on "${filename}"]\n\n${file.content}\n\n---\n\n${text}`;
-        setContextSentForFile(file.path);
+        
+        // Truncate large files to avoid excessive token usage
+        const MAX_CONTEXT_LINES = 500;
+        const MAX_CONTEXT_CHARS = 50000; // ~12.5k tokens
+        let content = file.content;
+        let truncated = false;
+        
+        const lines = content.split('\n');
+        if (lines.length > MAX_CONTEXT_LINES) {
+          content = lines.slice(0, MAX_CONTEXT_LINES).join('\n');
+          truncated = true;
+        }
+        if (content.length > MAX_CONTEXT_CHARS) {
+          content = content.slice(0, MAX_CONTEXT_CHARS);
+          truncated = true;
+        }
+        
+        const truncateNote = truncated ? `\n\n[Note: File truncated - showing first ${MAX_CONTEXT_LINES} lines or ${Math.round(MAX_CONTEXT_CHARS/1000)}k chars]` : '';
+        prompt = `[Context: Working on "${filename}"]${truncateNote}\n\n${content}\n\n---\n\n${text}`;
+        setContextSentForFile(fileKey);
       }
       
       // Track the full prompt to filter echoes (including context)
