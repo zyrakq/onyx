@@ -1346,6 +1346,7 @@ const App: Component = () => {
           onClose={() => setShowSettings(false)}
           vaultPath={vaultPath()}
           onSyncComplete={() => refreshSidebar?.()}
+          onSyncEnabledChange={(enabled) => setSyncStatus(enabled ? 'idle' : 'off')}
         />
       </Show>
 

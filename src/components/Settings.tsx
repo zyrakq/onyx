@@ -33,6 +33,7 @@ interface SettingsProps {
   onClose: () => void;
   vaultPath: string | null;
   onSyncComplete?: () => void;
+  onSyncEnabledChange?: (enabled: boolean) => void;
 }
 
 interface SettingsSectionItem {
@@ -761,6 +762,9 @@ const Settings: Component<SettingsProps> = (props) => {
     const engine = getSyncEngine();
     engine.setConfig({ enabled });
 
+    // Notify parent of sync status change
+    props.onSyncEnabledChange?.(enabled);
+
     // Manage periodic sync based on enabled state
     if (enabled && syncFrequency() === '5min') {
       startPeriodicSync();
@@ -891,11 +895,15 @@ const Settings: Component<SettingsProps> = (props) => {
       }
 
       setSyncStatus('success');
+      const totalSynced = vault.data.files?.length || 0;
       const parts = [];
-      if (uploadedCount > 0) parts.push(`uploaded ${uploadedCount}`);
-      if (downloadedCount > 0) parts.push(`downloaded ${downloadedCount}`);
-      if (parts.length === 0) parts.push('everything up to date');
-      setSyncMessage(`Sync complete: ${parts.join(', ')}`);
+      if (uploadedCount > 0) parts.push(`${uploadedCount} uploaded`);
+      if (downloadedCount > 0) parts.push(`${downloadedCount} downloaded`);
+      if (parts.length === 0) {
+        setSyncMessage(`Sync complete: all ${totalSynced} files up to date`);
+      } else {
+        setSyncMessage(`Sync complete: ${parts.join(', ')} (${totalSynced} total)`);
+      }
 
       // Refresh file explorer if files were downloaded
       if (downloadedCount > 0) {
