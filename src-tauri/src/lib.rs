@@ -1480,6 +1480,49 @@ fn skill_read_file(skill_id: String, file_name: String) -> Result<String, String
     fs::read_to_string(&file_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn fetch_skills_sh(limit: Option<u32>) -> Result<String, String> {
+    let limit = limit.unwrap_or(500); // Fetch up to 500 skills by default
+    let url = format!("https://skills.sh/api/skills?limit={}", limit);
+    
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch skills.sh: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("skills.sh returned status: {}", response.status()));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
+}
+
+#[tauri::command]
+async fn fetch_skill_file(url: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch skill file: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch skill file: status {}", response.status()));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read skill file: {}", e))
+}
+
 // Keyring commands for secure credential storage (desktop only)
 #[cfg(not(target_os = "android"))]
 mod keyring_commands {
@@ -1661,6 +1704,8 @@ pub fn run() {
             skill_delete,
             skill_list_installed,
             skill_read_file,
+            fetch_skills_sh,
+            fetch_skill_file,
             get_platform_info,
             opencode_installer::check_opencode_installed,
             opencode_installer::get_opencode_install_path,
