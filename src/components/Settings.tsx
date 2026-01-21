@@ -33,6 +33,17 @@ import {
   setCurrentModel,
   type ProviderInfo,
 } from '../lib/opencode/client';
+import {
+  fetchSkillsShLeaderboard,
+  searchSkillsSh,
+  sortSkillsSh,
+  formatInstallCount,
+  getSkillGitHubUrl,
+  installSkillFromSkillsSh,
+  isSkillInstalled,
+  type SkillsShSkill,
+  type SkillsSortOption,
+} from '../lib/skills';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
@@ -135,6 +146,17 @@ const Settings: Component<SettingsProps> = (props) => {
   const [skillStates, setSkillStates] = createSignal<Record<string, SkillState>>({});
   const [skillsLoading, setSkillsLoading] = createSignal(true);
   const [skillsError, setSkillsError] = createSignal<string | null>(null);
+
+  // Skills.sh library state
+  type SkillsTab = 'recommended' | 'browse' | 'installed';
+  const [skillsTab, setSkillsTab] = createSignal<SkillsTab>('recommended');
+  const [skillsShList, setSkillsShList] = createSignal<SkillsShSkill[]>([]);
+  const [skillsShLoading, setSkillsShLoading] = createSignal(false);
+  const [skillsShError, setSkillsShError] = createSignal<string | null>(null);
+  const [skillsShSearch, setSkillsShSearch] = createSignal('');
+  const [skillsShSort, setSkillsShSort] = createSignal<SkillsSortOption>('popular');
+  const [skillsShInstalling, setSkillsShInstalling] = createSignal<string | null>(null);
+  const [skillsShInstalled, setSkillsShInstalled] = createSignal<Set<string>>(new Set());
 
   // Modal dialog state
   const [modalConfig, setModalConfig] = createSignal<{
@@ -467,6 +489,62 @@ const Settings: Component<SettingsProps> = (props) => {
     } finally {
       setSkillsLoading(false);
     }
+  };
+
+  // Load skills.sh library
+  const loadSkillsShLibrary = async () => {
+    setSkillsShLoading(true);
+    setSkillsShError(null);
+
+    try {
+      const skills = await fetchSkillsShLeaderboard();
+      setSkillsShList(skills);
+
+      // Check which skills.sh skills are already installed
+      const installed = new Set<string>();
+      for (const skill of skills) {
+        const isInstalled = await isSkillInstalled(skill.id);
+        if (isInstalled) {
+          installed.add(skill.id);
+        }
+      }
+      setSkillsShInstalled(installed);
+    } catch (err) {
+      console.error('Failed to load skills.sh library:', err);
+      setSkillsShError(err instanceof Error ? err.message : 'Failed to load skills library');
+    } finally {
+      setSkillsShLoading(false);
+    }
+  };
+
+  // Install a skill from skills.sh
+  const handleSkillsShInstall = async (skill: SkillsShSkill) => {
+    setSkillsShInstalling(skill.id);
+
+    try {
+      await installSkillFromSkillsSh(skill);
+      setSkillsShInstalled(prev => new Set([...prev, skill.id]));
+      // Refresh the recommended skills list to show the newly installed skill
+      await loadSkillsManifest();
+    } catch (err) {
+      console.error(`Failed to install skill ${skill.id}:`, err);
+      setModalConfig({
+        type: 'info',
+        title: 'Installation Failed',
+        message: `Failed to install "${skill.name}": ${err instanceof Error ? err.message : 'Unknown error'}`,
+      });
+    } finally {
+      setSkillsShInstalling(null);
+    }
+  };
+
+  // Filtered and sorted skills.sh list
+  const filteredSkillsShList = () => {
+    let skills = skillsShList();
+    if (skillsShSearch()) {
+      skills = searchSkillsSh(skills, skillsShSearch());
+    }
+    return sortSkillsSh(skills, skillsShSort());
   };
 
   // Toggle skill enabled/disabled (installs or removes the skill)
@@ -1862,71 +1940,294 @@ const Settings: Component<SettingsProps> = (props) => {
                     <line x1="12" y1="16" x2="12" y2="12"></line>
                     <line x1="12" y1="8" x2="12.01" y2="8"></line>
                   </svg>
-                  <p>AI skills enhance OpenCode with specialized capabilities. Enable skills to download them to your system. Skills are stored in <code>~/.config/opencode/skills/</code></p>
+                  <p>AI skills enhance OpenCode with specialized capabilities. Skills are stored in <code>~/.config/opencode/skills/</code></p>
                 </div>
 
-                <Show when={skillsLoading()}>
-                  <div class="skills-loading">
-                    <div class="spinner"></div>
-                    <span>Loading skills...</span>
-                  </div>
-                </Show>
-
-                <Show when={skillsError()}>
-                  <div class="settings-notice warning">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                      <line x1="12" y1="9" x2="12" y2="13"></line>
-                      <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                {/* Skills tabs */}
+                <div class="skills-tabs">
+                  <button
+                    class={`skills-tab ${skillsTab() === 'recommended' ? 'active' : ''}`}
+                    onClick={() => setSkillsTab('recommended')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
                     </svg>
-                    <p>{skillsError()}</p>
-                  </div>
-                  <button class="setting-button" onClick={loadSkillsManifest}>Retry</button>
-                </Show>
+                    Recommended
+                  </button>
+                  <button
+                    class={`skills-tab ${skillsTab() === 'browse' ? 'active' : ''}`}
+                    onClick={() => {
+                      setSkillsTab('browse');
+                      if (skillsShList().length === 0 && !skillsShLoading()) {
+                        loadSkillsShLibrary();
+                      }
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    Browse Library
+                  </button>
+                  <button
+                    class={`skills-tab ${skillsTab() === 'installed' ? 'active' : ''}`}
+                    onClick={() => setSkillsTab('installed')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    Installed
+                  </button>
+                </div>
 
-                <Show when={!skillsLoading() && !skillsError()}>
-                  <div class="skills-list">
-                    <For each={availableSkills()}>
-                      {(skill) => {
-                        const state = () => skillStates()[skill.id] || { installed: false, enabled: false, downloading: false };
-                        return (
-                          <div class={`skill-item ${state().enabled ? 'enabled' : ''} ${state().downloading ? 'downloading' : ''}`}>
-                            <div class="skill-icon">
-                              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d={getSkillIcon(skill.icon)}></path>
-                              </svg>
-                            </div>
-                            <div class="skill-info">
-                              <div class="skill-header">
-                                <span class="skill-name">{skill.name}</span>
-                                <Show when={skill.isCustom}>
-                                  <span class="skill-badge custom">Custom</span>
+                {/* Recommended Skills Tab */}
+                <Show when={skillsTab() === 'recommended'}>
+                  <Show when={skillsLoading()}>
+                    <div class="skills-loading">
+                      <div class="spinner"></div>
+                      <span>Loading skills...</span>
+                    </div>
+                  </Show>
+
+                  <Show when={skillsError()}>
+                    <div class="settings-notice warning">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                      </svg>
+                      <p>{skillsError()}</p>
+                    </div>
+                    <button class="setting-button" onClick={loadSkillsManifest}>Retry</button>
+                  </Show>
+
+                  <Show when={!skillsLoading() && !skillsError()}>
+                    <div class="skills-list">
+                      <For each={availableSkills().filter(s => !s.isCustom)}>
+                        {(skill) => {
+                          const state = () => skillStates()[skill.id] || { installed: false, enabled: false, downloading: false };
+                          return (
+                            <div class={`skill-item ${state().enabled ? 'enabled' : ''} ${state().downloading ? 'downloading' : ''}`}>
+                              <div class="skill-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                  <path d={getSkillIcon(skill.icon)}></path>
+                                </svg>
+                              </div>
+                              <div class="skill-info">
+                                <div class="skill-header">
+                                  <span class="skill-name">{skill.name}</span>
+                                  <Show when={state().installed}>
+                                    <span class="skill-badge installed">Installed</span>
+                                  </Show>
+                                  <Show when={skill.dependencies && skill.dependencies.length > 0}>
+                                    <button
+                                      class="skill-badge deps clickable"
+                                      onClick={() => setModalConfig({
+                                        type: 'info',
+                                        title: `${skill.name} Dependencies`,
+                                        message: `This skill requires the following Python packages:\n\n${skill.dependencies?.map(d => `• ${d}`).join('\n')}\n\nInstall with:\npip install ${skill.dependencies?.join(' ')}`
+                                      })}
+                                      title="Click to see dependencies"
+                                    >
+                                      Has deps
+                                    </button>
+                                  </Show>
+                                </div>
+                                <p class="skill-description">{skill.description}</p>
+                                <span class="skill-category">{skill.category}</span>
+                              </div>
+                              <div class="skill-actions">
+                                <Show when={state().downloading}>
+                                  <div class="spinner small"></div>
                                 </Show>
-                                <Show when={state().installed && !skill.isCustom}>
-                                  <span class="skill-badge installed">Installed</span>
-                                </Show>
-                                <Show when={skill.dependencies && skill.dependencies.length > 0}>
+                                <Show when={!state().downloading}>
                                   <button
-                                    class="skill-badge deps clickable"
-                                    onClick={() => setModalConfig({
-                                      type: 'info',
-                                      title: `${skill.name} Dependencies`,
-                                      message: `This skill requires the following Python packages:\n\n${skill.dependencies?.map(d => `• ${d}`).join('\n')}\n\nInstall with:\npip install ${skill.dependencies?.join(' ')}`
-                                    })}
-                                    title="Click to see dependencies"
+                                    class="skill-source-btn"
+                                    onClick={() => open(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
+                                    title="View source on GitHub"
                                   >
-                                    Has deps
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                      <polyline points="15 3 21 3 21 9"></polyline>
+                                      <line x1="10" y1="14" x2="21" y2="3"></line>
+                                    </svg>
                                   </button>
+                                  <label class="setting-toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={state().enabled}
+                                      onChange={(e) => handleSkillToggle(skill.id, e.currentTarget.checked)}
+                                    />
+                                    <span class="toggle-slider"></span>
+                                  </label>
                                 </Show>
                               </div>
-                              <p class="skill-description">{skill.description}</p>
-                              <span class="skill-category">{skill.category}</span>
                             </div>
-                            <div class="skill-actions">
-                              <Show when={state().downloading}>
-                                <div class="spinner small"></div>
-                              </Show>
-                              <Show when={!state().downloading}>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </Show>
+                </Show>
+
+                {/* Browse Library Tab (skills.sh) */}
+                <Show when={skillsTab() === 'browse'}>
+                  {/* Search and filter bar */}
+                  <div class="skills-search-bar">
+                    <div class="skills-search-input">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      </svg>
+                      <input
+                        type="text"
+                        placeholder="Search skills..."
+                        value={skillsShSearch()}
+                        onInput={(e) => setSkillsShSearch(e.currentTarget.value)}
+                      />
+                    </div>
+                    <select
+                      class="skills-sort-select"
+                      value={skillsShSort()}
+                      onChange={(e) => setSkillsShSort(e.currentTarget.value as SkillsSortOption)}
+                    >
+                      <option value="popular">Most Popular</option>
+                      <option value="name">Name A-Z</option>
+                      <option value="source">By Source</option>
+                    </select>
+                  </div>
+
+                  <Show when={skillsShLoading()}>
+                    <div class="skills-loading">
+                      <div class="spinner"></div>
+                      <span>Loading skills library...</span>
+                    </div>
+                  </Show>
+
+                  <Show when={skillsShError()}>
+                    <div class="settings-notice warning">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                      </svg>
+                      <p>{skillsShError()}</p>
+                    </div>
+                    <button class="setting-button" onClick={loadSkillsShLibrary}>Retry</button>
+                  </Show>
+
+                  <Show when={!skillsShLoading() && !skillsShError()}>
+                    <div class="skills-sh-info">
+                      <span>Powered by <a href="https://skills.sh" target="_blank" rel="noopener noreferrer">skills.sh</a></span>
+                      <span class="skills-count">{filteredSkillsShList().length} skills</span>
+                    </div>
+                    <div class="skills-list skills-sh-list">
+                      <For each={filteredSkillsShList()}>
+                        {(skill) => {
+                          const isInstalled = () => skillsShInstalled().has(skill.id);
+                          const isInstalling = () => skillsShInstalling() === skill.id;
+                          return (
+                            <div class={`skill-item ${isInstalled() ? 'enabled' : ''} ${isInstalling() ? 'downloading' : ''}`}>
+                              <div class="skill-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+                                </svg>
+                              </div>
+                              <div class="skill-info">
+                                <div class="skill-header">
+                                  <span class="skill-name">{skill.name}</span>
+                                  <span class="skill-badge installs" title={`${skill.installs.toLocaleString()} installs`}>
+                                    {formatInstallCount(skill.installs)}
+                                  </span>
+                                  <Show when={isInstalled()}>
+                                    <span class="skill-badge installed">Installed</span>
+                                  </Show>
+                                </div>
+                                <span class="skill-source">{skill.topSource}</span>
+                              </div>
+                              <div class="skill-actions">
+                                <Show when={isInstalling()}>
+                                  <div class="spinner small"></div>
+                                </Show>
+                                <Show when={!isInstalling()}>
+                                  <button
+                                    class="skill-source-btn"
+                                    onClick={() => open(getSkillGitHubUrl(skill.topSource, skill.id))}
+                                    title="View on GitHub"
+                                  >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                      <polyline points="15 3 21 3 21 9"></polyline>
+                                      <line x1="10" y1="14" x2="21" y2="3"></line>
+                                    </svg>
+                                  </button>
+                                  <Show when={!isInstalled()}>
+                                    <button
+                                      class="setting-button small"
+                                      onClick={() => handleSkillsShInstall(skill)}
+                                      title="Install skill"
+                                    >
+                                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="7 10 12 15 17 10"></polyline>
+                                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                                      </svg>
+                                      Add
+                                    </button>
+                                  </Show>
+                                  <Show when={isInstalled()}>
+                                    <span class="skill-installed-check">
+                                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="20 6 9 17 4 12"></polyline>
+                                      </svg>
+                                    </span>
+                                  </Show>
+                                </Show>
+                              </div>
+                            </div>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </Show>
+                </Show>
+
+                {/* Installed Skills Tab */}
+                <Show when={skillsTab() === 'installed'}>
+                  <Show when={skillsLoading()}>
+                    <div class="skills-loading">
+                      <div class="spinner"></div>
+                      <span>Loading installed skills...</span>
+                    </div>
+                  </Show>
+
+                  <Show when={!skillsLoading()}>
+                    <div class="skills-list">
+                      <For each={availableSkills().filter(s => {
+                        const state = skillStates()[s.id];
+                        return state?.installed || state?.enabled;
+                      })}>
+                        {(skill) => {
+                          const state = () => skillStates()[skill.id] || { installed: false, enabled: false, downloading: false };
+                          return (
+                            <div class={`skill-item enabled`}>
+                              <div class="skill-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                  <path d={getSkillIcon(skill.icon)}></path>
+                                </svg>
+                              </div>
+                              <div class="skill-info">
+                                <div class="skill-header">
+                                  <span class="skill-name">{skill.name}</span>
+                                  <Show when={skill.isCustom}>
+                                    <span class="skill-badge custom">Custom</span>
+                                  </Show>
+                                </div>
+                                <p class="skill-description">{skill.description}</p>
+                                <span class="skill-category">{skill.category}</span>
+                              </div>
+                              <div class="skill-actions">
                                 <button
                                   class="skill-source-btn"
                                   onClick={() => open(`${SKILLS_BASE_URL}/${skill.id}/SKILL.md`)}
@@ -1946,30 +2247,43 @@ const Settings: Component<SettingsProps> = (props) => {
                                   />
                                   <span class="toggle-slider"></span>
                                 </label>
-                              </Show>
+                              </div>
                             </div>
-                          </div>
-                        );
-                      }}
-                    </For>
+                          );
+                        }}
+                      </For>
+
+                      <Show when={availableSkills().filter(s => {
+                        const state = skillStates()[s.id];
+                        return state?.installed || state?.enabled;
+                      }).length === 0}>
+                        <div class="skills-empty">
+                          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+                          </svg>
+                          <p>No skills installed yet</p>
+                          <span>Browse the library or check out recommended skills to get started.</span>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+
+                  <div class="settings-section-title" style="margin-top: 24px;">Custom Skills</div>
+                  <div class="setting-item">
+                    <div class="setting-info">
+                      <div class="setting-name">Import skill</div>
+                      <div class="setting-description">Upload a SKILL.md file or .zip archive</div>
+                    </div>
+                    <button class="setting-button secondary" onClick={handleImportSkill}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                      </svg>
+                      Upload
+                    </button>
                   </div>
                 </Show>
-
-                <div class="settings-section-title" style="margin-top: 24px;">Custom Skills</div>
-                <div class="setting-item">
-                  <div class="setting-info">
-                    <div class="setting-name">Import skill</div>
-                    <div class="setting-description">Upload a SKILL.md file or .zip archive</div>
-                  </div>
-                  <button class="setting-button secondary" onClick={handleImportSkill}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                      <polyline points="17 8 12 3 7 8"></polyline>
-                      <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
-                    Upload
-                  </button>
-                </div>
               </div>
             </Show>
 
