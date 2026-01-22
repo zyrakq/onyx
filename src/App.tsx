@@ -51,6 +51,8 @@ const App: Component = () => {
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
   const [showSearch, setShowSearch] = createSignal(false);
   const [showTerminal, setShowTerminal] = createSignal(false);
+  // Flag to prevent settings save effect from running before initial load completes
+  const [settingsLoaded, setSettingsLoaded] = createSignal(false);
   const [showSettings, setShowSettings] = createSignal(false);
   const [settingsSection, setSettingsSection] = createSignal<string | undefined>(undefined);
   const [showGraphView, setShowGraphView] = createSignal(false);
@@ -97,7 +99,7 @@ const App: Component = () => {
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
   const [sidebarView, setSidebarView] = createSignal<SidebarView>('files');
-  // TODO: Sync bookmarks and saved searches via Nostr (encrypted user preferences)
+  // Bookmarks and saved searches - synced via Nostr (NIP-78 encrypted user preferences)
   const [bookmarks, setBookmarks] = createSignal<string[]>(
     JSON.parse(localStorage.getItem('bookmarks') || '[]')
   );
@@ -270,18 +272,22 @@ const App: Component = () => {
 
     // Load settings asynchronously
     invoke<AppSettings>('load_settings').then(async (settings) => {
+      console.log('[App] Settings loaded:', settings);
       let vaultToOpen = settings.vault_path;
       
       // On mobile, if no vault is set, auto-initialize to default vault
       if (!vaultToOpen) {
         try {
           const platformInfo = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+          console.log('[App] Platform info for auto-init:', platformInfo);
           if ((platformInfo.platform === 'android' || platformInfo.platform === 'ios') && platformInfo.default_vault_path) {
             // Create the directory if it doesn't exist
+            console.log('[App] Auto-initializing mobile vault at:', platformInfo.default_vault_path);
             await invoke('create_folder', { path: platformInfo.default_vault_path });
             vaultToOpen = platformInfo.default_vault_path;
             // Save this as the vault path
             await invoke('save_settings', { settings: { vault_path: vaultToOpen, show_terminal: false } });
+            console.log('[App] Mobile vault auto-initialized and saved');
           }
         } catch (err) {
           console.error('Failed to auto-initialize mobile vault:', err);
@@ -289,6 +295,7 @@ const App: Component = () => {
       }
       
       if (vaultToOpen) {
+        console.log('[App] Setting vault path to:', vaultToOpen);
         setVaultPath(vaultToOpen);
         // Build note index for wikilink resolution
         try {
@@ -308,8 +315,14 @@ const App: Component = () => {
       if (settings.show_terminal) {
         setShowTerminal(true);
       }
+      
+      // Mark settings as loaded - now the save effect can run
+      console.log('[App] Settings load complete, enabling save effect');
+      setSettingsLoaded(true);
     }).catch(err => {
       console.error('Failed to load settings:', err);
+      // Still mark as loaded so app can function
+      setSettingsLoaded(true);
     });
 
     // Initialize sync status from localStorage
@@ -412,6 +425,9 @@ const App: Component = () => {
         if (vaults.length > 0) {
           setCurrentVault(vaults[0]);
         }
+        
+        // Fetch and merge user preferences (bookmarks, saved searches)
+        await fetchPreferencesFromNostr();
       }
     } catch (err) {
       console.error('Failed to fetch shared documents:', err);
@@ -572,11 +588,20 @@ const App: Component = () => {
     }
   });
 
-  // Save settings when vault path changes
+  // Save settings when vault path changes (but not before initial load)
   createEffect(() => {
     const path = vaultPath();
     const terminal = showTerminal();
+    const loaded = settingsLoaded();
+    
+    // Don't save settings until initial load is complete to prevent race conditions
+    if (!loaded) {
+      console.log('[App] Settings not yet loaded, skipping save');
+      return;
+    }
+    
     // Save settings (debounced by the effect system)
+    console.log('[App] Saving settings - vault_path:', path);
     invoke('save_settings', {
       settings: {
         vault_path: path,
@@ -807,14 +832,17 @@ const App: Component = () => {
   };
 
   // Open vault - works on both mobile and desktop
-  const openVault = async () => {
+  // Returns the vault path if successful, null otherwise
+  const openVault = async (): Promise<string | null> => {
     try {
       await impactLight();
       
       if (isMobileApp()) {
         // On mobile, use the default vault path
         const info = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+        console.log('[App] openVault - platform info:', info);
         if (info.default_vault_path) {
+          console.log('[App] openVault - creating folder:', info.default_vault_path);
           await invoke('create_folder', { path: info.default_vault_path });
           setVaultPath(info.default_vault_path);
           localStorage.setItem('vault_path', info.default_vault_path);
@@ -823,6 +851,10 @@ const App: Component = () => {
             refreshSidebar();
           }
           await notificationSuccess();
+          return info.default_vault_path;
+        } else {
+          console.error('[App] openVault - no default_vault_path returned');
+          return null;
         }
       } else {
         // On desktop, use folder picker
@@ -838,11 +870,14 @@ const App: Component = () => {
           if (refreshSidebar) {
             refreshSidebar();
           }
+          return selected;
         }
+        return null;
       }
     } catch (err) {
       console.error('[App] Failed to open vault:', err);
       await notificationError();
+      return null;
     }
   };
 
@@ -857,13 +892,18 @@ const App: Component = () => {
     }
     
     // Fallback: create note directly (especially for mobile when drawer hasn't been opened)
-    const vault = vaultPath();
+    let vault = vaultPath();
     console.log('[App] createNewNote - vault path:', vault);
     
     if (!vault) {
       console.warn('[App] Cannot create note: no vault path, attempting to open vault first');
-      await openVault();
-      return;
+      // openVault returns the path directly, so we don't need to re-read from state
+      vault = await openVault();
+      if (!vault) {
+        console.error('[App] Still no vault path after openVault, aborting');
+        return;
+      }
+      console.log('[App] Vault opened, continuing with path:', vault);
     }
     
     // Ensure vault directory exists
@@ -927,7 +967,7 @@ const App: Component = () => {
     }
   };
 
-  const toggleBookmark = (path: string) => {
+  const toggleBookmark = async (path: string) => {
     const current = bookmarks();
     let updated: string[];
     if (current.includes(path)) {
@@ -937,9 +977,12 @@ const App: Component = () => {
     }
     setBookmarks(updated);
     localStorage.setItem('bookmarks', JSON.stringify(updated));
+    
+    // Sync to Nostr if logged in
+    await syncPreferencesToNostr(updated, savedSearches());
   };
 
-  const toggleSavedSearch = (query: string) => {
+  const toggleSavedSearch = async (query: string) => {
     const current = savedSearches();
     let updated: string[];
     if (current.includes(query)) {
@@ -949,6 +992,72 @@ const App: Component = () => {
     }
     setSavedSearches(updated);
     localStorage.setItem('savedSearches', JSON.stringify(updated));
+    
+    // Sync to Nostr if logged in
+    await syncPreferencesToNostr(bookmarks(), updated);
+  };
+  
+  // Sync preferences to Nostr (debounced)
+  let syncPreferencesTimeout: ReturnType<typeof setTimeout> | null = null;
+  const syncPreferencesToNostr = async (bookmarksList: string[], searchesList: string[]) => {
+    // Debounce to avoid too many writes
+    if (syncPreferencesTimeout) {
+      clearTimeout(syncPreferencesTimeout);
+    }
+    
+    syncPreferencesTimeout = setTimeout(async () => {
+      try {
+        const engine = getSyncEngine();
+        const signer = engine.getSigner();
+        if (!signer) return; // Not logged in, skip sync
+        
+        await engine.savePreferences({
+          bookmarks: bookmarksList,
+          savedSearches: searchesList,
+          updatedAt: Math.floor(Date.now() / 1000),
+        });
+        console.log('[App] Preferences synced to Nostr');
+      } catch (err) {
+        console.error('[App] Failed to sync preferences to Nostr:', err);
+      }
+    }, 2000); // 2 second debounce
+  };
+  
+  // Fetch and merge preferences from Nostr on startup
+  const fetchPreferencesFromNostr = async () => {
+    try {
+      const engine = getSyncEngine();
+      const signer = engine.getSigner();
+      if (!signer) return; // Not logged in
+      
+      const prefs = await engine.fetchPreferences();
+      if (!prefs) return; // No preferences stored
+      
+      // Get local timestamps
+      const localBookmarksTime = parseInt(localStorage.getItem('bookmarks_updated') || '0');
+      const localSearchesTime = parseInt(localStorage.getItem('savedSearches_updated') || '0');
+      
+      // If remote is newer, merge (union of both sets)
+      if (prefs.updatedAt > localBookmarksTime || prefs.updatedAt > localSearchesTime) {
+        const localBookmarks = bookmarks();
+        const localSearches = savedSearches();
+        
+        // Merge bookmarks (union)
+        const mergedBookmarks = [...new Set([...localBookmarks, ...prefs.bookmarks])];
+        const mergedSearches = [...new Set([...localSearches, ...prefs.savedSearches])];
+        
+        setBookmarks(mergedBookmarks);
+        setSavedSearches(mergedSearches);
+        localStorage.setItem('bookmarks', JSON.stringify(mergedBookmarks));
+        localStorage.setItem('savedSearches', JSON.stringify(mergedSearches));
+        localStorage.setItem('bookmarks_updated', String(prefs.updatedAt));
+        localStorage.setItem('savedSearches_updated', String(prefs.updatedAt));
+        
+        console.log('[App] Preferences merged from Nostr');
+      }
+    } catch (err) {
+      console.error('[App] Failed to fetch preferences from Nostr:', err);
+    }
   };
 
   // Handle hashtag clicks from editor
@@ -1975,7 +2084,6 @@ const App: Component = () => {
           title={postToNostrTarget()!.title}
           onClose={() => setPostToNostrTarget(null)}
           onPublish={async (options) => {
-            // TODO: Implement NIP-23 article publishing
             const engine = getSyncEngine();
             const signer = engine.getSigner();
             if (!signer) {

@@ -623,14 +623,31 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
               <>
                 <h1>Onyx</h1>
                 <p>Open a vault to get started</p>
-                <Show when={props.onOpenVault}>
-                  <button class="welcome-create-btn" onClick={props.onOpenVault}>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    Open Vault
-                  </button>
-                </Show>
+                <div class="welcome-buttons">
+                  <Show when={props.onOpenVault}>
+                    <button class="welcome-create-btn" onClick={props.onOpenVault}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                      </svg>
+                      Open Vault
+                    </button>
+                  </Show>
+                  {/* On mobile, also show Create Note which will auto-create vault */}
+                  <Show when={props.onCreateFile}>
+                    <button class="welcome-create-btn secondary" onClick={() => {
+                      console.log('[Editor] Create new note button clicked (no vault)');
+                      props.onCreateFile?.();
+                    }}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="12" y1="18" x2="12" y2="12"></line>
+                        <line x1="9" y1="15" x2="15" y2="15"></line>
+                      </svg>
+                      Create New Note
+                    </button>
+                  </Show>
+                </div>
               </>
             }
           >

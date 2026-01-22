@@ -1093,6 +1093,23 @@ body {
   opacity: 0.9;
 }
 
+.welcome-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.welcome-create-btn.secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+}
+
+.welcome-create-btn.secondary:hover {
+  background: var(--bg-hover);
+}
+
 .open-vault-btn {
   margin-top: 24px;
   padding: 12px 24px;

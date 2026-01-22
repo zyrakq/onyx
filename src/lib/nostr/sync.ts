@@ -5,7 +5,7 @@
  * Supports both local signing (nsec) and remote signing (NIP-46 bunker).
  */
 
-import { SimplePool, finalizeEvent, nip44, nip19, type Event } from 'nostr-tools';
+import { SimplePool, finalizeEvent, nip44, nip19, nip17, type Event } from 'nostr-tools';
 import { v4 as uuidv4 } from 'uuid';
 import { hexToBytes } from '@noble/hashes/utils.js';
 import {
@@ -13,6 +13,8 @@ import {
   KIND_VAULT_INDEX,
   KIND_SHARED_DOCUMENT,
   KIND_MUTE_LIST,
+  KIND_APP_DATA,
+  APP_DATA_IDENTIFIER,
   ENCRYPTION_METHOD,
   type NostrIdentity,
   type Vault,
@@ -28,6 +30,7 @@ import {
   type SentShare,
   type ShareResult,
   type Attachment,
+  type UserPreferences,
   DEFAULT_SYNC_CONFIG,
 } from './types';
 import {
@@ -195,6 +198,38 @@ export class SyncEngine {
       return nip44.v2.decrypt(ciphertext, this.conversationKey);
     } else {
       throw new Error('No decryption method available');
+    }
+  }
+
+  /**
+   * Send a NIP-17 private direct message
+   * Uses gift-wrapped sealed messages for privacy
+   */
+  private async sendPrivateDM(
+    recipientPubkey: string,
+    message: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Get the secret key from the signer
+      const secretKey = this.signer?.getSecretKey?.();
+      if (!secretKey) {
+        return { success: false, error: 'No secret key available for NIP-17 DM' };
+      }
+
+      // Create the gift-wrapped event using nostr-tools nip17
+      const recipient = { publicKey: recipientPubkey };
+      const giftWrap = nip17.wrapEvent(secretKey, recipient, message);
+
+      // Publish to relays
+      await this.publishEvent(giftWrap as Event);
+
+      return { success: true };
+    } catch (err) {
+      console.error('[SyncEngine] Failed to send NIP-17 DM:', err);
+      return { 
+        success: false, 
+        error: err instanceof Error ? err.message : 'Unknown error' 
+      };
     }
   }
 
@@ -677,14 +712,17 @@ export class SyncEngine {
 
     await this.publishEvent(event);
 
-    // TODO: Send NIP-17 DM notification (implemented in Phase 6)
-    const dmSent = false;
-    const dmError = undefined;
+    // Send NIP-17 DM notification to recipient
+    const dmMessage = senderName 
+      ? `${senderName} shared a document with you: "${title}"`
+      : `You received a shared document: "${title}"`;
+    
+    const dmResult = await this.sendPrivateDM(recipientPubkey, dmMessage);
 
     return {
       eventId: event.id,
-      dmSent,
-      dmError,
+      dmSent: dmResult.success,
+      dmError: dmResult.error,
     };
   }
 
@@ -1037,6 +1075,72 @@ export class SyncEngine {
   public getFileNaddr(d: string): string | null {
     if (!this.pubkey) return null;
     return this.encodeNaddr(KIND_FILE, this.pubkey, d, this.config.relays);
+  }
+
+  // ============================================
+  // User Preferences (NIP-78)
+  // ============================================
+
+  /**
+   * Fetch user preferences from Nostr (bookmarks, saved searches)
+   * Uses NIP-78 application-specific data (kind 30078)
+   */
+  async fetchPreferences(): Promise<UserPreferences | null> {
+    this.ensureIdentity();
+
+    const events = await this.pool.querySync(
+      this.config.relays,
+      {
+        kinds: [KIND_APP_DATA],
+        authors: [this.pubkey!],
+        '#d': [APP_DATA_IDENTIFIER],
+      }
+    );
+
+    if (events.length === 0) {
+      return null;
+    }
+
+    // Get the most recent preferences (replaceable event by d-tag)
+    const latest = events.sort((a, b) => b.created_at - a.created_at)[0];
+
+    try {
+      const decrypted = await this.decryptContent(latest.content);
+      const prefs = JSON.parse(decrypted) as UserPreferences;
+      return prefs;
+    } catch (err) {
+      console.error('[SyncEngine] Failed to decrypt preferences:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Save user preferences to Nostr
+   * Encrypts to self and publishes as NIP-78 event
+   */
+  async savePreferences(prefs: UserPreferences): Promise<string> {
+    this.ensureIdentity();
+
+    const now = Math.floor(Date.now() / 1000);
+    const payload: UserPreferences = {
+      ...prefs,
+      updatedAt: now,
+    };
+
+    const encryptedContent = await this.encryptContent(JSON.stringify(payload));
+
+    const event = await this.signEvent({
+      kind: KIND_APP_DATA,
+      created_at: now,
+      tags: [
+        ['d', APP_DATA_IDENTIFIER],
+        ['encrypted', ENCRYPTION_METHOD],
+      ],
+      content: encryptedContent,
+    });
+
+    await this.publishEvent(event);
+    return event.id;
   }
 
   // ============================================

@@ -1502,6 +1502,120 @@ fn skill_read_file(skill_id: String, file_name: String) -> Result<String, String
     fs::read_to_string(&file_path).map_err(|e| e.to_string())
 }
 
+/// Import a skill from a ZIP file
+/// Returns the skill ID (folder name) extracted from the ZIP
+#[tauri::command]
+fn skill_import_zip(zip_path: String) -> Result<String, String> {
+    use std::io::Read;
+    use zip::ZipArchive;
+
+    let file = fs::File::open(&zip_path).map_err(|e| format!("Failed to open ZIP: {}", e))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    // Find SKILL.md to determine the skill structure
+    // ZIP could be structured as:
+    // 1. skill-name/SKILL.md (with folder)
+    // 2. SKILL.md (flat, at root)
+    let mut skill_id: Option<String> = None;
+    let mut has_root_skill_md = false;
+
+    for i in 0..archive.len() {
+        let file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+        let name = file.name();
+
+        if name == "SKILL.md" {
+            has_root_skill_md = true;
+        } else if name.ends_with("/SKILL.md") {
+            // Extract folder name (first component)
+            if let Some(folder) = name.split('/').next() {
+                skill_id = Some(folder.to_string());
+            }
+        }
+    }
+
+    // Determine skill ID
+    let skill_id = if let Some(id) = skill_id {
+        id
+    } else if has_root_skill_md {
+        // Use ZIP filename as skill ID
+        let zip_name = std::path::Path::new(&zip_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported-skill");
+        zip_name
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+    } else {
+        return Err("ZIP does not contain a SKILL.md file".to_string());
+    };
+
+    let skill_dir = get_skills_dir().join(&skill_id);
+    fs::create_dir_all(&skill_dir).map_err(|e| format!("Failed to create skill directory: {}", e))?;
+
+    // Re-open archive for extraction
+    let file = fs::File::open(&zip_path).map_err(|e| format!("Failed to open ZIP: {}", e))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
+
+    // Extract files
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+        let name = file.name().to_string();
+
+        // Skip directories
+        if name.ends_with('/') {
+            continue;
+        }
+
+        // Determine output path
+        let output_name = if has_root_skill_md && !name.contains('/') {
+            // Flat structure - file is at root
+            name.clone()
+        } else if let Some(rest) = name.strip_prefix(&format!("{}/", skill_id)) {
+            // Nested structure - strip the folder prefix
+            rest.to_string()
+        } else if name.contains('/') {
+            // Some other nested structure - use path after first /
+            name.split('/').skip(1).collect::<Vec<_>>().join("/")
+        } else {
+            name.clone()
+        };
+
+        if output_name.is_empty() {
+            continue;
+        }
+
+        let output_path = skill_dir.join(&output_name);
+
+        // Create parent directories if needed
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+
+        // Read and write file
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)
+            .map_err(|e| format!("Failed to read ZIP entry: {}", e))?;
+        fs::write(&output_path, &contents)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+    }
+
+    // Verify SKILL.md exists
+    if !skill_dir.join("SKILL.md").exists() {
+        // Clean up
+        let _ = fs::remove_dir_all(&skill_dir);
+        return Err("Extracted files do not contain SKILL.md".to_string());
+    }
+
+    Ok(skill_id)
+}
+
 #[tauri::command]
 async fn fetch_skills_sh(limit: Option<u32>) -> Result<String, String> {
     let limit = limit.unwrap_or(500); // Fetch up to 500 skills by default
@@ -1782,6 +1896,7 @@ pub fn run() {
             skill_delete,
             skill_list_installed,
             skill_read_file,
+            skill_import_zip,
             fetch_skills_sh,
             fetch_skill_file,
             get_platform_info,

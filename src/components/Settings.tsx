@@ -1291,12 +1291,18 @@ const Settings: Component<SettingsProps> = (props) => {
             title: 'Skill imported',
             message: `Successfully imported skill "${skillName}".`
           });
-        } else {
-          // TODO: Handle zip import
+        } else if (selected.endsWith('.zip')) {
+          // Import ZIP archive
+          const skillId = await invoke<string>('skill_import_zip', { zipPath: selected });
+          
+          // Read the SKILL.md to get the skill name
+          const content = await invoke<string>('skill_read_file', { skillId, fileName: 'SKILL.md' });
+          const skillName = parseSkillName(content, skillId);
+          
           setModalConfig({
             type: 'info',
-            title: 'Not implemented',
-            message: 'ZIP import is not yet implemented. Please import a SKILL.md file directly.'
+            title: 'Skill imported',
+            message: `Successfully imported skill "${skillName}" from ZIP archive.`
           });
         }
 

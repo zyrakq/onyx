@@ -9,6 +9,10 @@ export const KIND_FILE = 30800;
 export const KIND_VAULT_INDEX = 30801;
 export const KIND_SHARED_DOCUMENT = 30802;
 
+// NIP-78 Application-specific data (for user preferences)
+export const KIND_APP_DATA = 30078;
+export const APP_DATA_IDENTIFIER = 'onyx/preferences';
+
 // NIP-51 Lists
 export const KIND_MUTE_LIST = 10000;
 
@@ -347,4 +351,17 @@ export interface NostrProfile {
   nip05?: string;
   /** About/bio */
   about?: string;
+}
+
+/**
+ * User preferences synced via Nostr (NIP-78)
+ * Encrypted to self, stored with d-tag "onyx/preferences"
+ */
+export interface UserPreferences {
+  /** Bookmarked file paths (relative to vault) */
+  bookmarks: string[];
+  /** Saved search queries */
+  savedSearches: string[];
+  /** Last updated timestamp */
+  updatedAt: number;
 }

@@ -337,14 +337,6 @@ export async function deleteSession(sessionId: string): Promise<void> {
 }
 
 /**
- * Get session status (idle, busy, etc.)
- */
-export async function getSessionStatus(_sessionId: string): Promise<string> {
-  // TODO: Fix SDK typing issue - for now we'll track status via events
-  return 'idle';
-}
-
-/**
  * Provider info
  */
 export interface ProviderInfo {

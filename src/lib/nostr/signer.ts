@@ -22,6 +22,8 @@ export interface NostrSigner extends BaseNostrSigner {
   getType(): SignerType;
   /** Close connections (no-op for local signer) */
   close?(): void;
+  /** Get the secret key (only available for local signers) */
+  getSecretKey?(): Uint8Array | null;
 }
 
 /**
@@ -29,8 +31,10 @@ export interface NostrSigner extends BaseNostrSigner {
  */
 class LocalSignerWrapper implements NostrSigner {
   private signer: NSecSigner;
+  private secretKey: Uint8Array;
 
   constructor(secretKey: Uint8Array) {
+    this.secretKey = secretKey;
     this.signer = new NSecSigner(secretKey);
   }
 
@@ -44,6 +48,10 @@ class LocalSignerWrapper implements NostrSigner {
 
   getType(): SignerType {
     return 'local';
+  }
+
+  getSecretKey(): Uint8Array {
+    return this.secretKey;
   }
 
   get nip44() {
