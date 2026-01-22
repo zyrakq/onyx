@@ -79,6 +79,12 @@ const App: Component = () => {
   const [showGraphView, setShowGraphView] = createSignal(false);
   const [terminalWidth, setTerminalWidth] = createSignal(500);
   const [sidebarWidth, setSidebarWidth] = createSignal(session?.sidebarWidth ?? 260);
+  const [sidebarCollapsed, setSidebarCollapsed] = createSignal(session?.sidebarCollapsed ?? false);
+  const [sidebarView, setSidebarView] = createSignal<SidebarView>(session?.sidebarView ?? 'files');
+  // Expanded folders for file tree - shared with Sidebar
+  const [expandedFolders, setExpandedFolders] = createSignal<Set<string>>(
+    new Set(session?.expandedFolders ?? [])
+  );
   let createNoteFromSidebar: (() => void) | null = null;
   let refreshSidebar: (() => void) | null = null;
   let setSearchQuery: ((query: string) => void) | null = null;
@@ -118,8 +124,6 @@ const App: Component = () => {
 
   const [resizeStartX, setResizeStartX] = createSignal(0);
   const [resizeStartWidth, setResizeStartWidth] = createSignal(0);
-  const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false);
-  const [sidebarView, setSidebarView] = createSignal<SidebarView>('files');
   // Bookmarks and saved searches - synced via Nostr (NIP-78 encrypted user preferences)
   const [bookmarks, setBookmarks] = createSignal<string[]>(
     JSON.parse(localStorage.getItem('bookmarks') || '[]')
@@ -645,6 +649,30 @@ const App: Component = () => {
   });
   createEffect(() => {
     localStorage.setItem('backlinks_width', backlinksWidth().toString());
+  });
+
+  // Persist session state (tabs, sidebar state, expanded folders)
+  createEffect(() => {
+    const currentTabs = tabs();
+    const currentActiveIndex = activeTabIndex();
+    const currentSidebarWidth = sidebarWidth();
+    const currentSidebarCollapsed = sidebarCollapsed();
+    const currentSidebarView = sidebarView();
+    const currentExpandedFolders = expandedFolders();
+    
+    // Only save if we have a vault (meaning app has initialized)
+    if (!vaultPath()) return;
+    
+    const sessionState: SessionState = {
+      tabs: currentTabs.map(t => ({ path: t.path, name: t.name })),
+      activeTabIndex: currentActiveIndex,
+      sidebarWidth: currentSidebarWidth,
+      sidebarCollapsed: currentSidebarCollapsed,
+      sidebarView: currentSidebarView,
+      expandedFolders: Array.from(currentExpandedFolders),
+    };
+    
+    localStorage.setItem('session_state', JSON.stringify(sessionState));
   });
 
   // Build note graph and cache file contents for backlinks
@@ -1412,35 +1440,48 @@ const App: Component = () => {
           onClose={() => setMobileDrawerOpen(false)}
           title={sidebarView() === 'files' ? (vaultPath()?.split('/').pop() || 'Files') : sidebarView() === 'search' ? 'Search' : 'Bookmarks'}
           headerAction={
-            sidebarView() === 'files' ? (
-              <button
-                class="mobile-drawer-action"
-                onClick={async () => {
-                  // On mobile, re-initialize the default vault
-                  try {
-                    await impactLight();
-                    const info = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
-                    if (info.default_vault_path) {
-                      await invoke('create_folder', { path: info.default_vault_path });
-                      setVaultPath(info.default_vault_path);
-                      localStorage.setItem('vault_path', info.default_vault_path);
-                      // Trigger sidebar refresh
-                      if (refreshSidebar) {
-                        refreshSidebar();
-                      }
-                      await notificationSuccess();
+            sidebarView() === 'files' && vaultPath() ? (
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  class="mobile-drawer-action"
+                  onClick={async () => {
+                    // Create a new folder at vault root
+                    const folderName = `New Folder ${Date.now()}`;
+                    const folderPath = `${vaultPath()}/${folderName}`;
+                    try {
+                      await invoke('create_folder', { path: folderPath });
+                      if (refreshSidebar) refreshSidebar();
+                      await impactLight();
+                    } catch (err) {
+                      console.error('[App] Failed to create folder:', err);
                     }
-                  } catch (err) {
-                    console.error('[App] Failed to open vault:', err);
-                    await notificationError();
-                  }
-                }}
-                title="Open Vault"
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                </svg>
-              </button>
+                  }}
+                  title="New Folder"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    <line x1="12" y1="11" x2="12" y2="17"/>
+                    <line x1="9" y1="14" x2="15" y2="14"/>
+                  </svg>
+                </button>
+                <button
+                  class="mobile-drawer-action"
+                  onClick={async () => {
+                    // Create a new note
+                    await createNewNote();
+                    // Close the drawer after creating
+                    setMobileDrawerOpen(false);
+                  }}
+                  title="New Note"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="12" y1="18" x2="12" y2="12"/>
+                    <line x1="9" y1="15" x2="15" y2="15"/>
+                  </svg>
+                </button>
+              </div>
             ) : undefined
           }
         >

@@ -29,6 +29,9 @@ interface SidebarProps {
   onShareFile?: (path: string, content: string) => void;
   onFileInfo?: (path: string) => void;
   onPostToNostr?: (path: string, content: string, title: string) => void;
+  // External expanded folders state (for session persistence)
+  expandedFolders?: Set<string>;
+  onExpandedFoldersChange?: (folders: Set<string>) => void;
 }
 
 interface SearchResult {
@@ -39,7 +42,16 @@ interface SearchResult {
 
 const Sidebar: Component<SidebarProps> = (props) => {
   const [files, setFiles] = createSignal<FileEntry[]>([]);
-  const [expandedFolders, setExpandedFolders] = createSignal<Set<string>>(new Set());
+  // Use external expanded folders state if provided, otherwise use internal state
+  const [internalExpandedFolders, setInternalExpandedFolders] = createSignal<Set<string>>(new Set());
+  const expandedFolders = () => props.expandedFolders ?? internalExpandedFolders();
+  const setExpandedFolders = (folders: Set<string>) => {
+    if (props.onExpandedFoldersChange) {
+      props.onExpandedFoldersChange(folders);
+    } else {
+      setInternalExpandedFolders(folders);
+    }
+  };
   const [contextMenu, setContextMenu] = createSignal<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
   const [isCreating, setIsCreating] = createSignal<{ parentPath: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = createSignal('');
