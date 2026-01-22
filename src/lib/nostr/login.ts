@@ -6,6 +6,7 @@
  * - Import nsec/hex private key
  *
  * Secrets (nsec) are stored in the OS keyring via Tauri.
+ * On mobile, biometric authentication is required to access credentials.
  * Only non-sensitive metadata is stored in localStorage.
  */
 
@@ -14,6 +15,8 @@ import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js';
 import { NRelay1 } from '@nostrify/nostrify';
 import { invoke } from '@tauri-apps/api/core';
 import type { NostrIdentity } from './types';
+import { authenticateWithBiometric } from '../biometric';
+import { isMobile } from '../platform';
 
 // Keyring helper functions
 async function keyringSet(key: string, value: string): Promise<void> {
@@ -359,6 +362,7 @@ export async function getLogins(): Promise<StoredLogin[]> {
 
 /**
  * Get the current login from keyring (async)
+ * Note: This function does NOT require biometric auth - use getCurrentLoginWithAuth for protected access
  */
 export async function getCurrentLogin(): Promise<StoredLogin | null> {
   try {
@@ -368,6 +372,23 @@ export async function getCurrentLogin(): Promise<StoredLogin | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Get the current login with biometric authentication on mobile
+ * Use this for initial app load or when accessing sensitive operations
+ */
+export async function getCurrentLoginWithAuth(): Promise<StoredLogin | null> {
+  // On mobile, require biometric auth to access credentials
+  if (isMobile()) {
+    const authenticated = await authenticateWithBiometric('Unlock your Nostr identity');
+    if (!authenticated) {
+      console.log('[Login] Biometric authentication failed or cancelled');
+      return null;
+    }
+  }
+  
+  return getCurrentLogin();
 }
 
 /**
@@ -448,4 +469,26 @@ export function getIdentityFromLogin(login: StoredLogin): NostrIdentity | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Get the nsec with biometric authentication on mobile
+ * Use this when the user wants to view or copy their private key
+ */
+export async function getNsecWithAuth(): Promise<string | null> {
+  // On mobile, require biometric auth to view nsec
+  if (isMobile()) {
+    const authenticated = await authenticateWithBiometric('View your private key');
+    if (!authenticated) {
+      console.log('[Login] Biometric authentication failed or cancelled');
+      return null;
+    }
+  }
+  
+  const login = await getCurrentLogin();
+  if (!login || login.type !== 'nsec' || !login.nsec) {
+    return null;
+  }
+  
+  return login.nsec;
 }

@@ -15,8 +15,12 @@ import SharedDocPreview from './components/SharedDocPreview';
 import SentSharesPanel from './components/SentSharesPanel';
 import FileInfoDialog from './components/FileInfoDialog';
 import PostToNostrDialog from './components/PostToNostrDialog';
+import { MobileHeader, MobileNav, MobileDrawer, type MobileNavTab } from './components/mobile';
+import { initPlatform, usePlatformInfo } from './lib/platform';
+import { impactLight, impactMedium, notificationSuccess, notificationError } from './lib/haptics';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
@@ -120,6 +124,15 @@ const App: Component = () => {
   const [showFileInfo, setShowFileInfo] = createSignal<string | null>(null);
   const [postToNostrTarget, setPostToNostrTarget] = createSignal<{ path: string; content: string; title: string } | null>(null);
 
+  // Mobile state
+  const platformInfo = usePlatformInfo();
+  const [mobileDrawerOpen, setMobileDrawerOpen] = createSignal(false);
+  const [mobileNavTab, setMobileNavTab] = createSignal<MobileNavTab>('files');
+  const isMobileApp = () => {
+    const info = platformInfo();
+    return info?.platform === 'android' || info?.platform === 'ios';
+  };
+
   // Unread count for notifications badge
   const unreadShareCount = () => sharedWithMe().filter(d => !d.isRead).length;
 
@@ -169,6 +182,81 @@ const App: Component = () => {
 
   // Load settings on startup
   onMount(() => {
+    // Initialize platform detection first
+    initPlatform().then((info) => {
+      console.log('[App] Platform detected:', info.platform);
+      
+      // Set up Android back button handler using Tauri v2.9+ API
+      if (info.platform === 'android') {
+        onBackButtonPress((event) => {
+          // Handle back navigation in order of priority:
+          // 1. Close settings modal if open
+          if (showSettings()) {
+            setShowSettings(false);
+            return;
+          }
+          // 2. Close mobile drawer if open
+          if (mobileDrawerOpen()) {
+            setMobileDrawerOpen(false);
+            return;
+          }
+          // 3. Close any modals (quick switcher, command palette, search)
+          if (showQuickSwitcher()) {
+            setShowQuickSwitcher(false);
+            return;
+          }
+          if (showCommandPalette()) {
+            setShowCommandPalette(false);
+            return;
+          }
+          if (showSearch()) {
+            setShowSearch(false);
+            return;
+          }
+          // 4. Close share dialog if open
+          if (shareTarget()) {
+            setShareTarget(null);
+            setShowShareDialog(false);
+            return;
+          }
+          // 5. Close graph view if showing
+          if (showGraphView()) {
+            setShowGraphView(false);
+            return;
+          }
+          // 6. Close notifications/sent shares panels
+          if (showNotifications()) {
+            setShowNotifications(false);
+            return;
+          }
+          if (showSentShares()) {
+            setShowSentShares(false);
+            return;
+          }
+          // 7. Close previewing doc if open
+          if (previewingDoc()) {
+            setPreviewingDoc(null);
+            return;
+          }
+          // 8. Close current tab if there are multiple tabs
+          const currentTabs = tabs();
+          const currentIndex = activeTabIndex();
+          if (currentTabs.length > 1 && currentIndex >= 0) {
+            closeTab(currentIndex);
+            return;
+          }
+          // 9. If webview can go back, do that
+          if (event.canGoBack) {
+            window.history.back();
+            return;
+          }
+          // 10. No more navigation - app will exit (default behavior when handler returns without action)
+        }).catch(err => {
+          console.error('[App] Failed to register back button handler:', err);
+        });
+      }
+    });
+
     // Apply appearance settings immediately
     applyAppearanceSettings();
 
@@ -182,19 +270,37 @@ const App: Component = () => {
 
     // Load settings asynchronously
     invoke<AppSettings>('load_settings').then(async (settings) => {
-      if (settings.vault_path) {
-        setVaultPath(settings.vault_path);
+      let vaultToOpen = settings.vault_path;
+      
+      // On mobile, if no vault is set, auto-initialize to default vault
+      if (!vaultToOpen) {
+        try {
+          const platformInfo = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+          if ((platformInfo.platform === 'android' || platformInfo.platform === 'ios') && platformInfo.default_vault_path) {
+            // Create the directory if it doesn't exist
+            await invoke('create_folder', { path: platformInfo.default_vault_path });
+            vaultToOpen = platformInfo.default_vault_path;
+            // Save this as the vault path
+            await invoke('save_settings', { settings: { vault_path: vaultToOpen, show_terminal: false } });
+          }
+        } catch (err) {
+          console.error('Failed to auto-initialize mobile vault:', err);
+        }
+      }
+      
+      if (vaultToOpen) {
+        setVaultPath(vaultToOpen);
         // Build note index for wikilink resolution
         try {
-          const files = await invoke<FileEntry[]>('list_files', { path: settings.vault_path });
-          setNoteIndex(buildNoteIndex(files, settings.vault_path));
+          const files = await invoke<FileEntry[]>('list_files', { path: vaultToOpen });
+          setNoteIndex(buildNoteIndex(files, vaultToOpen));
         } catch (err) {
           console.error('Failed to build initial note index:', err);
         }
         // Build asset index for embed resolution
         try {
-          const assets = await invoke<AssetEntry[]>('list_assets', { path: settings.vault_path });
-          setAssetIndex(buildAssetIndex(assets, settings.vault_path));
+          const assets = await invoke<AssetEntry[]>('list_assets', { path: vaultToOpen });
+          setAssetIndex(buildAssetIndex(assets, vaultToOpen));
         } catch (err) {
           console.error('Failed to build initial asset index:', err);
         }
@@ -700,9 +806,117 @@ const App: Component = () => {
     openFile(path);
   };
 
-  const createNewNote = () => {
+  // Open vault - works on both mobile and desktop
+  const openVault = async () => {
+    try {
+      await impactLight();
+      
+      if (isMobileApp()) {
+        // On mobile, use the default vault path
+        const info = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+        if (info.default_vault_path) {
+          await invoke('create_folder', { path: info.default_vault_path });
+          setVaultPath(info.default_vault_path);
+          localStorage.setItem('vault_path', info.default_vault_path);
+          // Refresh sidebar
+          if (refreshSidebar) {
+            refreshSidebar();
+          }
+          await notificationSuccess();
+        }
+      } else {
+        // On desktop, use folder picker
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: 'Select Vault Folder',
+        });
+        if (selected && typeof selected === 'string') {
+          setVaultPath(selected);
+          localStorage.setItem('vault_path', selected);
+          if (refreshSidebar) {
+            refreshSidebar();
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[App] Failed to open vault:', err);
+      await notificationError();
+    }
+  };
+
+  const createNewNote = async () => {
+    console.log('[App] createNewNote called');
+    
+    // First try the sidebar's create function if available
     if (createNoteFromSidebar) {
+      console.log('[App] Using sidebar create function');
       createNoteFromSidebar();
+      return;
+    }
+    
+    // Fallback: create note directly (especially for mobile when drawer hasn't been opened)
+    const vault = vaultPath();
+    console.log('[App] createNewNote - vault path:', vault);
+    
+    if (!vault) {
+      console.warn('[App] Cannot create note: no vault path, attempting to open vault first');
+      await openVault();
+      return;
+    }
+    
+    // Ensure vault directory exists
+    try {
+      console.log('[App] Ensuring vault folder exists:', vault);
+      await invoke('create_folder', { path: vault });
+      console.log('[App] Vault folder created/verified');
+    } catch (err) {
+      console.error('[App] Failed to ensure vault folder exists:', err);
+      // Continue anyway - the folder might already exist
+    }
+    
+    // Generate unique filename
+    const timestamp = new Date().toISOString().slice(0, 10);
+    let filename = `Untitled ${timestamp}.md`;
+    let filepath = `${vault}/${filename}`;
+    let counter = 1;
+    
+    try {
+      // Check if file exists and increment counter if needed
+      console.log('[App] Checking if file exists:', filepath);
+      while (await invoke<boolean>('file_exists', { path: filepath })) {
+        filename = `Untitled ${timestamp} ${counter}.md`;
+        filepath = `${vault}/${filename}`;
+        counter++;
+      }
+      
+      console.log('[App] Creating note at:', filepath);
+      
+      // Create the file with some initial content
+      await invoke('create_file', { path: filepath });
+      
+      console.log('[App] Note created successfully');
+      
+      // Open it
+      console.log('[App] Opening file...');
+      await openFile(filepath);
+      
+      console.log('[App] File opened');
+      
+      // Refresh sidebar if available
+      if (refreshSidebar) {
+        refreshSidebar();
+      }
+      
+      // Haptic feedback on mobile
+      await impactMedium();
+      console.log('[App] createNewNote complete');
+    } catch (err) {
+      console.error('[App] Failed to create note:', err);
+      // Show error to user
+      alert('Failed to create note: ' + (err as Error).message);
+      await notificationError();
     }
   };
 
@@ -1028,9 +1242,112 @@ const App: Component = () => {
     };
   });
 
+  // Handle mobile navigation tab changes
+  const handleMobileNavChange = (tab: MobileNavTab) => {
+    setMobileNavTab(tab);
+    if (tab === 'files' || tab === 'search' || tab === 'bookmarks') {
+      setSidebarView(tab);
+      setMobileDrawerOpen(true);
+    } else if (tab === 'settings') {
+      setShowSettings(true);
+    }
+  };
+
+  // Get current file title for mobile header
+  const currentFileTitle = () => {
+    const tab = currentTab();
+    if (showGraphView()) return 'Graph View';
+    if (!tab) return 'Onyx';
+    return tab.name.replace(/\.md$/, '');
+  };
+
   return (
-    <div class="app">
-      {/* Left Icon Bar */}
+    <div class={`app ${isMobileApp() ? 'mobile' : ''}`}>
+      {/* Mobile Header - Only shown on mobile */}
+      <Show when={isMobileApp()}>
+        <MobileHeader
+          title={currentFileTitle()}
+          isDirty={currentTab()?.isDirty}
+          onMenuClick={() => setMobileDrawerOpen(true)}
+          onSyncClick={() => handleStatusBarSync()}
+          syncStatus={syncStatus()}
+        />
+      </Show>
+
+      {/* Mobile Drawer - Only shown on mobile */}
+      <Show when={isMobileApp()}>
+        <MobileDrawer
+          isOpen={mobileDrawerOpen()}
+          onClose={() => setMobileDrawerOpen(false)}
+          title={sidebarView() === 'files' ? (vaultPath()?.split('/').pop() || 'Files') : sidebarView() === 'search' ? 'Search' : 'Bookmarks'}
+          headerAction={
+            sidebarView() === 'files' ? (
+              <button
+                class="mobile-drawer-action"
+                onClick={async () => {
+                  // On mobile, re-initialize the default vault
+                  try {
+                    await impactLight();
+                    const info = await invoke<{ platform: string; default_vault_path: string | null }>('get_platform_info');
+                    if (info.default_vault_path) {
+                      await invoke('create_folder', { path: info.default_vault_path });
+                      setVaultPath(info.default_vault_path);
+                      localStorage.setItem('vault_path', info.default_vault_path);
+                      // Trigger sidebar refresh
+                      if (refreshSidebar) {
+                        refreshSidebar();
+                      }
+                      await notificationSuccess();
+                    }
+                  } catch (err) {
+                    console.error('[App] Failed to open vault:', err);
+                    await notificationError();
+                  }
+                }}
+                title="Open Vault"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
+            ) : undefined
+          }
+        >
+          <Sidebar
+            onFileSelect={(path) => {
+              openFile(path);
+              setMobileDrawerOpen(false);
+            }}
+            currentFile={currentTab()?.path || null}
+            vaultPath={vaultPath()}
+            onVaultOpen={setVaultPath}
+            onFileCreated={handleFileCreated}
+            onFileDeleted={handleFileDeleted}
+            view={sidebarView()}
+            bookmarks={bookmarks()}
+            onToggleBookmark={toggleBookmark}
+            savedSearches={savedSearches()}
+            onToggleSavedSearch={toggleSavedSearch}
+            exposeCreateNote={(fn) => { createNoteFromSidebar = fn; }}
+            exposeRefresh={(fn) => { refreshSidebar = fn; }}
+            exposeSearchQuery={(fn) => { setSearchQuery = fn; }}
+            onShareFile={handleShareFile}
+            onFileInfo={handleFileInfo}
+            onPostToNostr={handlePostToNostr}
+          />
+        </MobileDrawer>
+      </Show>
+
+      {/* Mobile Bottom Navigation - Only shown on mobile */}
+      <Show when={isMobileApp()}>
+        <MobileNav
+          activeTab={mobileNavTab()}
+          onTabChange={handleMobileNavChange}
+          unreadNotifications={unreadShareCount()}
+        />
+      </Show>
+
+      {/* Left Icon Bar - Hidden on mobile via CSS */}
       <div class="icon-bar">
         <button
           class={`icon-btn ${!sidebarCollapsed() && sidebarView() === 'files' ? 'active' : ''}`}
@@ -1113,15 +1430,18 @@ const App: Component = () => {
           </Show>
         </button>
         <div class="icon-bar-spacer"></div>
-        <button
-          class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
-          onClick={() => setShowTerminal(!showTerminal())}
-          title="Toggle OpenCode (Ctrl+`)"
-        >
-          <svg width="24" height="24" viewBox="0 0 512 512" fill="currentColor">
-            <path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"/>
-          </svg>
-        </button>
+        {/* OpenCode button - Hidden on mobile */}
+        <Show when={!isMobileApp()}>
+          <button
+            class={`icon-btn opencode-icon ${showTerminal() ? 'active' : ''}`}
+            onClick={() => setShowTerminal(!showTerminal())}
+            title="Toggle OpenCode (Ctrl+`)"
+          >
+            <svg width="24" height="24" viewBox="0 0 512 512" fill="currentColor">
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z"/>
+            </svg>
+          </button>
+        </Show>
         <button
           class={`icon-btn ${showSettings() ? 'active' : ''}`}
           onClick={() => setShowSettings(true)}
@@ -1144,8 +1464,8 @@ const App: Component = () => {
         </button>
       </div>
 
-      {/* Sidebar */}
-      <Show when={!sidebarCollapsed()}>
+      {/* Sidebar - Hidden on mobile, use drawer instead */}
+      <Show when={!sidebarCollapsed() && !isMobileApp()}>
         <div style={{ width: `${sidebarWidth()}px`, 'flex-shrink': 0 }}>
           <Sidebar
             onFileSelect={openFile}
@@ -1239,6 +1559,7 @@ const App: Component = () => {
                 filePath={currentTab()?.path || null}
                 vaultPath={vaultPath()}
                 onCreateFile={createNewNote}
+                onOpenVault={openVault}
                 onHashtagClick={handleHashtagClick}
                 scrollToLine={scrollToLine()}
                 onScrollComplete={() => setScrollToLine(null)}
@@ -1310,8 +1631,8 @@ const App: Component = () => {
             </div>
           </Show>
 
-          {/* OpenCode Panel - Right Side */}
-          <Show when={showTerminal()}>
+          {/* OpenCode Panel - Right Side (Desktop only) */}
+          <Show when={showTerminal() && !isMobileApp()}>
             <div
               class="resize-handle"
               onMouseDown={handleTerminalResizeStart}

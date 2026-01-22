@@ -13,6 +13,13 @@ val tauriProperties = Properties().apply {
     }
 }
 
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.onyxnotes.dev"
@@ -26,12 +33,12 @@ android {
     }
     signingConfigs {
         create("release") {
-            val keystorePath = System.getenv("KEYSTORE_PATH")
+            val keystorePath = System.getenv("KEYSTORE_PATH") ?: keystoreProperties.getProperty("storeFile")
             if (keystorePath != null) {
                 storeFile = file(keystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: keystoreProperties.getProperty("storePassword")
+                keyAlias = System.getenv("KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias")
+                keyPassword = System.getenv("KEY_PASSWORD") ?: keystoreProperties.getProperty("keyPassword")
             }
         }
     }
@@ -48,7 +55,7 @@ android {
             }
         }
         getByName("release") {
-            val keystorePath = System.getenv("KEYSTORE_PATH")
+            val keystorePath = System.getenv("KEYSTORE_PATH") ?: keystoreProperties.getProperty("storeFile")
             if (keystorePath != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -60,8 +67,12 @@ android {
             )
         }
     }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "21"
     }
     buildFeatures {
         buildConfig = true
@@ -77,6 +88,8 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
+    // Encrypted SharedPreferences for secure credential storage
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

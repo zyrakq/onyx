@@ -742,59 +742,71 @@ const Sidebar: Component<SidebarProps> = (props) => {
       {/* Search View */}
       <Show when={props.view === 'search'}>
         <div class="sidebar-content">
-          <div class="sidebar-search">
-            <input
-              type="text"
-              class="sidebar-search-input"
-              placeholder="Search in files..."
-              value={searchQuery()}
-              onInput={(e) => handleSearchInput(e.currentTarget.value)}
-            />
-            <Show when={searchQuery().trim()}>
-              <button
-                class={`search-save-btn ${props.savedSearches.includes(searchQuery().trim()) ? 'saved' : ''}`}
-                onClick={() => props.onToggleSavedSearch(searchQuery().trim())}
-                title={props.savedSearches.includes(searchQuery().trim()) ? 'Remove saved search' : 'Save this search'}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill={props.savedSearches.includes(searchQuery().trim()) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
-                  <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
-                </svg>
-              </button>
+          <Show
+            when={props.vaultPath}
+            fallback={
+              <div class="sidebar-empty-state">
+                <p>Open a vault to search files</p>
+                <button class="open-vault-btn" onClick={openVault}>
+                  Open Vault
+                </button>
+              </div>
+            }
+          >
+            <div class="sidebar-search">
+              <input
+                type="text"
+                class="sidebar-search-input"
+                placeholder="Search in files..."
+                value={searchQuery()}
+                onInput={(e) => handleSearchInput(e.currentTarget.value)}
+              />
+              <Show when={searchQuery().trim()}>
+                <button
+                  class={`search-save-btn ${props.savedSearches.includes(searchQuery().trim()) ? 'saved' : ''}`}
+                  onClick={() => props.onToggleSavedSearch(searchQuery().trim())}
+                  title={props.savedSearches.includes(searchQuery().trim()) ? 'Remove saved search' : 'Save this search'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill={props.savedSearches.includes(searchQuery().trim()) ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2">
+                    <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
+                  </svg>
+                </button>
+              </Show>
+            </div>
+            <Show when={isSearching()}>
+              <div class="sidebar-message">Searching...</div>
             </Show>
-          </div>
-          <Show when={isSearching()}>
-            <div class="sidebar-message">Searching...</div>
-          </Show>
-          <Show when={!isSearching() && searchQuery() && searchResults().length === 0}>
-            <div class="sidebar-message">No results found</div>
-          </Show>
-          <Show when={!isSearching() && searchResults().length > 0}>
-            <For each={searchResults()}>
-              {(result) => (
-                <div class="search-result-item">
-                  <div
-                    class="search-result-file"
-                    onClick={() => props.onFileSelect(result.path)}
-                  >
-                    📄 {result.name}
+            <Show when={!isSearching() && searchQuery() && searchResults().length === 0}>
+              <div class="sidebar-message">No results found</div>
+            </Show>
+            <Show when={!isSearching() && searchResults().length > 0}>
+              <For each={searchResults()}>
+                {(result) => (
+                  <div class="search-result-item">
+                    <div
+                      class="search-result-file"
+                      onClick={() => props.onFileSelect(result.path)}
+                    >
+                      📄 {result.name}
+                    </div>
+                    <For each={result.matches.slice(0, 3)}>
+                      {(match) => (
+                        <div
+                          class="search-result-match"
+                          onClick={() => props.onFileSelect(result.path, match.line)}
+                        >
+                          <span class="match-line">{match.line}</span>
+                          <span class="match-content">{match.content}</span>
+                        </div>
+                      )}
+                    </For>
                   </div>
-                  <For each={result.matches.slice(0, 3)}>
-                    {(match) => (
-                      <div
-                        class="search-result-match"
-                        onClick={() => props.onFileSelect(result.path, match.line)}
-                      >
-                        <span class="match-line">{match.line}</span>
-                        <span class="match-content">{match.content}</span>
-                      </div>
-                    )}
-                  </For>
-                </div>
-              )}
-            </For>
-          </Show>
-          <Show when={!searchQuery()}>
-            <div class="sidebar-message">Type to search in all files</div>
+                )}
+              </For>
+            </Show>
+            <Show when={!searchQuery()}>
+              <div class="sidebar-message">Type to search in all files</div>
+            </Show>
           </Show>
         </div>
       </Show>
@@ -802,9 +814,20 @@ const Sidebar: Component<SidebarProps> = (props) => {
       {/* Bookmarks View */}
       <Show when={props.view === 'bookmarks'}>
         <div class="sidebar-content">
-          <Show when={props.bookmarks.length === 0 && props.savedSearches.length === 0}>
-            <div class="sidebar-message">No bookmarks yet. Right-click a file to bookmark it, or save a search.</div>
-          </Show>
+          <Show
+            when={props.vaultPath}
+            fallback={
+              <div class="sidebar-empty-state">
+                <p>Open a vault to use bookmarks</p>
+                <button class="open-vault-btn" onClick={openVault}>
+                  Open Vault
+                </button>
+              </div>
+            }
+          >
+            <Show when={props.bookmarks.length === 0 && props.savedSearches.length === 0}>
+              <div class="sidebar-message">No bookmarks yet. Right-click a file to bookmark it, or save a search.</div>
+            </Show>
 
           {/* Saved Searches */}
           <Show when={props.savedSearches.length > 0}>
@@ -842,24 +865,25 @@ const Sidebar: Component<SidebarProps> = (props) => {
             </div>
           </Show>
 
-          {/* File Bookmarks */}
-          <Show when={props.bookmarks.length > 0}>
-            <div class="bookmark-section">
-              <Show when={props.savedSearches.length > 0}>
-                <div class="bookmark-section-title">Files</div>
-              </Show>
-              <For each={props.bookmarks}>
-                {(path) => (
-                  <div
-                    class={`file-tree-item ${props.currentFile === path ? 'active' : ''}`}
-                    onClick={() => props.onFileSelect(path)}
-                  >
-                    <span>🔖</span>
-                    <span>{path.split('/').pop()}</span>
-                  </div>
-                )}
-              </For>
-            </div>
+            {/* File Bookmarks */}
+            <Show when={props.bookmarks.length > 0}>
+              <div class="bookmark-section">
+                <Show when={props.savedSearches.length > 0}>
+                  <div class="bookmark-section-title">Files</div>
+                </Show>
+                <For each={props.bookmarks}>
+                  {(path) => (
+                    <div
+                      class={`file-tree-item ${props.currentFile === path ? 'active' : ''}`}
+                      onClick={() => props.onFileSelect(path)}
+                    >
+                      <span>🔖</span>
+                      <span>{path.split('/').pop()}</span>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
           </Show>
         </div>
       </Show>

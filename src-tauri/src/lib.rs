@@ -256,6 +256,11 @@ fn create_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn file_exists(path: String) -> bool {
+    Path::new(&path).exists()
+}
+
+#[tauri::command]
 fn delete_file(path: String) -> Result<(), String> {
     let path = Path::new(&path);
     if path.is_dir() {
@@ -629,13 +634,21 @@ fn start_opencode_server(
             .map_err(|e| format!("Failed to spawn opencode: {}. PATH={}", e, enhanced_path))?
     };
 
+    // OpenCode is not supported on Android
+    #[cfg(target_os = "android")]
+    {
+        return Err("OpenCode is not supported on Android".to_string());
+    }
+
     // Store the process for later cleanup
+    #[cfg(not(target_os = "android"))]
     {
         let mut server_state = state.lock();
         server_state.process = Some(child);
         server_state.port = Some(port);
     }
 
+    #[cfg(not(target_os = "android"))]
     Ok(())
 }
 
@@ -823,8 +836,17 @@ mod opencode_installer {
             all(target_os = "linux", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "aarch64"),
         )))]
-        return Err("Unsupported platform".to_string());
+        {
+            return Err("Unsupported platform".to_string());
+        }
 
+        #[cfg(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "windows", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "aarch64"),
+        ))]
         Ok(format!("{}/{}", base_url, asset))
     }
 
@@ -1557,21 +1579,61 @@ mod keyring_commands {
     }
 }
 
-// Stub keyring commands for Android
+// Android keyring commands using app-private file storage
+// Data is stored in the app's private directory which requires root access to read
+// Combined with biometric authentication in the UI layer for additional security
 #[cfg(target_os = "android")]
 mod keyring_commands {
-    #[tauri::command]
-    pub fn keyring_set(_key: String, _value: String) -> Result<(), String> {
-        Err("Keyring not supported on Android".to_string())
+    use std::fs;
+    use std::path::PathBuf;
+    use tauri::Manager;
+
+    fn get_secure_storage_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+        let data_dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+        
+        let secure_dir = data_dir.join(".secure");
+        if !secure_dir.exists() {
+            fs::create_dir_all(&secure_dir)
+                .map_err(|e| format!("Failed to create secure dir: {}", e))?;
+        }
+        Ok(secure_dir)
+    }
+
+    fn get_key_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, String> {
+        let secure_dir = get_secure_storage_path(app)?;
+        // Hash the key name to avoid filesystem issues with special characters
+        let hash = format!("{:x}", md5::compute(key.as_bytes()));
+        Ok(secure_dir.join(hash))
     }
 
     #[tauri::command]
-    pub fn keyring_get(_key: String) -> Result<Option<String>, String> {
-        Ok(None)
+    pub fn keyring_set(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+        let path = get_key_path(&app, &key)?;
+        fs::write(&path, value.as_bytes())
+            .map_err(|e| format!("Failed to write secure data: {}", e))
     }
 
     #[tauri::command]
-    pub fn keyring_delete(_key: String) -> Result<(), String> {
+    pub fn keyring_get(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
+        let path = get_key_path(&app, &key)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read secure data: {}", e))?;
+        Ok(Some(data))
+    }
+
+    #[tauri::command]
+    pub fn keyring_delete(app: tauri::AppHandle, key: String) -> Result<(), String> {
+        let path = get_key_path(&app, &key)?;
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| format!("Failed to delete secure data: {}", e))?;
+        }
         Ok(())
     }
 }
@@ -1583,10 +1645,25 @@ pub fn run() {
         Arc::new(Mutex::new(OpenCodeServerState::default()));
     let opencode_server_state_clone = opencode_server_state.clone();
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Mobile-only plugins
+    #[cfg(mobile)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_haptics::init())
+            .plugin(tauri_plugin_biometric::init());
+    }
+
+    builder
         .manage(Arc::new(Mutex::new(PtyState::default())) as SharedPtyState)
         .manage(Arc::new(Mutex::new(WatcherState::default())) as SharedWatcherState)
         .manage(opencode_server_state)
@@ -1677,6 +1754,7 @@ pub fn run() {
             read_binary_file,
             create_file,
             create_folder,
+            file_exists,
             delete_file,
             rename_file,
             copy_file,

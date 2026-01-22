@@ -20,6 +20,21 @@
         { "path": "$DOWNLOAD/**" },
         { "path": "$DESKTOP/**" }
       ]
-    }
+    },
+    "store:default",
+    "haptics:allow-vibrate",
+    "haptics:allow-impact-feedback",
+    "haptics:allow-notification-feedback",
+    "haptics:allow-selection-feedback",
+    "notification:default",
+    "opener:default",
+    "biometric:default",
+    "deep-link:default",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-image",
+    "clipboard-manager:allow-write-image",
+    "clipboard-manager:allow-write-html"
   ]
 }

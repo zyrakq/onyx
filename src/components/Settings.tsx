@@ -44,6 +44,8 @@ import {
   type SkillsShSkill,
   type SkillsSortOption,
 } from '../lib/skills';
+import { usePlatformInfo, isMobile } from '../lib/platform';
+import { authenticateWithBiometric } from '../lib/biometric';
 
 type SettingsSection = 'general' | 'editor' | 'files' | 'appearance' | 'hotkeys' | 'opencode' | 'productivity' | 'sync' | 'nostr' | 'about';
 type LoginTab = 'generate' | 'import';
@@ -104,6 +106,21 @@ const sections: SettingsSectionItem[] = [
 
 const Settings: Component<SettingsProps> = (props) => {
   const [activeSection, setActiveSection] = createSignal<SettingsSection>(props.initialSection || 'general');
+
+  // Platform detection for hiding OpenCode/Productivity on mobile
+  const platformInfo = usePlatformInfo();
+  const isMobileApp = () => {
+    const info = platformInfo();
+    return info?.platform === 'android' || info?.platform === 'ios';
+  };
+
+  // Filter sections based on platform - hide OpenCode, Productivity, and Hotkeys on mobile
+  const filteredSections = () => {
+    if (isMobileApp()) {
+      return sections.filter(s => s.id !== 'opencode' && s.id !== 'productivity' && s.id !== 'hotkeys');
+    }
+    return sections;
+  };
 
   // Login state
   const [currentLogin, setCurrentLogin] = createSignal<StoredLogin | null>(null);
@@ -1303,7 +1320,7 @@ const Settings: Component<SettingsProps> = (props) => {
         <div class="settings-sidebar">
           <div class="settings-sidebar-header">Settings</div>
           <div class="settings-nav">
-            <For each={sections}>
+            <For each={filteredSections()}>
               {(section) => (
                 <button
                   class={`settings-nav-item ${activeSection() === section.id ? 'active' : ''}`}
@@ -1322,7 +1339,7 @@ const Settings: Component<SettingsProps> = (props) => {
         {/* Settings Content */}
         <div class="settings-content">
           <div class="settings-content-header">
-            <h2>{sections.find(s => s.id === activeSection())?.label}</h2>
+            <h2>{filteredSections().find(s => s.id === activeSection())?.label}</h2>
             <button class="settings-close" onClick={props.onClose}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -2472,7 +2489,14 @@ const Settings: Component<SettingsProps> = (props) => {
                             <Show when={showPrivateKey()} fallback={<code class="key-value">••••••••••••••••••••••</code>}>
                               <code class="key-value">{identity()!.nsec}</code>
                             </Show>
-                            <button class="key-action-btn" onClick={() => setShowPrivateKey(!showPrivateKey())} title={showPrivateKey() ? "Hide" : "Show"}>
+                            <button class="key-action-btn" onClick={async () => {
+                              if (!showPrivateKey() && isMobile()) {
+                                // Require biometric to show nsec on mobile
+                                const authenticated = await authenticateWithBiometric('View your private key');
+                                if (!authenticated) return;
+                              }
+                              setShowPrivateKey(!showPrivateKey());
+                            }} title={showPrivateKey() ? "Hide" : "Show"}>
                               <Show when={showPrivateKey()} fallback={
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -2485,7 +2509,14 @@ const Settings: Component<SettingsProps> = (props) => {
                                 </svg>
                               </Show>
                             </button>
-                            <button class="key-action-btn" onClick={() => copyToClipboard(identity()!.nsec)} title="Copy">
+                            <button class="key-action-btn" onClick={async () => {
+                              if (isMobile()) {
+                                // Require biometric to copy nsec on mobile
+                                const authenticated = await authenticateWithBiometric('Copy your private key');
+                                if (!authenticated) return;
+                              }
+                              copyToClipboard(identity()!.nsec);
+                            }} title="Copy">
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
