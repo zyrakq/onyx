@@ -15,6 +15,7 @@ import {
   subscribeToEvents,
   abortSession,
   respondToPermission,
+  respondToToolPermission,
   getCurrentModel,
   type ChatMessage,
   type MessagePart,
@@ -22,6 +23,7 @@ import {
   type ActiveTool,
   type ToolStatus,
   type Question,
+  type ToolPermission,
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
 import { sanitizeImageUrl } from '../lib/security';
@@ -147,6 +149,9 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const [activeQuestion, setActiveQuestion] = createSignal<Question | null>(null);
   const [selectedAnswers, setSelectedAnswers] = createSignal<Set<string>>(new Set());
   const [customAnswer, setCustomAnswer] = createSignal('');
+  
+  // Tool permission requests (file edits, bash commands, etc.)
+  const [activePermission, setActivePermission] = createSignal<ToolPermission | null>(null);
   
   // Simple hash function for detecting content changes
   const hashContent = (content: string): string => {
@@ -534,6 +539,8 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           metadata?: Record<string, unknown>;
         };
         
+        console.log('[OpenCodeChat] Permission event:', permission);
+        
         // Only handle permissions for our session
         if (permission.sessionID !== currentSessionId) break;
         
@@ -562,15 +569,49 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           });
           setSelectedAnswers(new Set<string>());
           setCustomAnswer('');
+        } else {
+          // This is a tool permission (file edit, bash, etc.)
+          const permType = permission.type || 'unknown';
+          
+          // Extract details from metadata based on permission type
+          let filePath: string | undefined;
+          let command: string | undefined;
+          let description: string | undefined;
+          const remember = metadata.remember as string[] | undefined;
+          
+          if (permType === 'edit' || permType === 'write' || permType === 'read') {
+            filePath = metadata.path as string || metadata.filePath as string;
+            description = `${permType === 'read' ? 'Read' : 'Edit'} file: ${filePath}`;
+          } else if (permType === 'bash') {
+            command = metadata.command as string || metadata.input as string;
+            description = `Run command: ${command}`;
+          } else if (permType === 'external_directory') {
+            filePath = metadata.path as string;
+            description = `Access external directory: ${filePath}`;
+          } else {
+            description = permission.title || `Permission: ${permType}`;
+          }
+          
+          setActivePermission({
+            id: permission.id || '',
+            sessionId: permission.sessionID || '',
+            type: permType,
+            title: permission.title || `Allow ${permType}?`,
+            description,
+            filePath,
+            command,
+            remember,
+          });
         }
         break;
       }
       
       case 'permission.replied': {
-        // Question was answered, clear it
+        // Permission was answered, clear both
         setActiveQuestion(null);
         setSelectedAnswers(new Set<string>());
         setCustomAnswer('');
+        setActivePermission(null);
         break;
       }
       
@@ -1379,6 +1420,98 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                     Submit ({selectedAnswers().size} selected)
                   </button>
                 </Show>
+              </div>
+            </div>
+          </Show>
+
+          {/* Tool Permission Request (file edits, bash commands, etc.) */}
+          <Show when={activePermission()}>
+            <div class="chat-permission">
+              <div class="chat-permission-header">
+                <Show when={activePermission()!.type === 'bash'} fallback={
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                }>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="4 17 10 11 4 5"></polyline>
+                    <line x1="12" y1="19" x2="20" y2="19"></line>
+                  </svg>
+                </Show>
+                <span>{activePermission()!.title}</span>
+              </div>
+              <div class="chat-permission-body">
+                <Show when={activePermission()!.description}>
+                  <p class="chat-permission-description">{activePermission()!.description}</p>
+                </Show>
+                <Show when={activePermission()!.filePath}>
+                  <code class="chat-permission-path">{activePermission()!.filePath}</code>
+                </Show>
+                <Show when={activePermission()!.command}>
+                  <code class="chat-permission-command">{activePermission()!.command}</code>
+                </Show>
+                <div class="chat-permission-actions">
+                  <button
+                    class="chat-permission-btn allow"
+                    onClick={() => {
+                      const p = activePermission();
+                      if (!p) return;
+                      respondToToolPermission(p.sessionId, p.id, 'once')
+                        .then(() => setActivePermission(null))
+                        .catch(err => {
+                          console.error('Failed to approve permission:', err);
+                          setError('Failed to approve permission');
+                        });
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Allow
+                  </button>
+                  <button
+                    class="chat-permission-btn always"
+                    onClick={() => {
+                      const p = activePermission();
+                      if (!p) return;
+                      respondToToolPermission(p.sessionId, p.id, 'always')
+                        .then(() => setActivePermission(null))
+                        .catch(err => {
+                          console.error('Failed to approve permission:', err);
+                          setError('Failed to approve permission');
+                        });
+                    }}
+                    title={activePermission()!.remember?.length ? `Remember: ${activePermission()!.remember!.join(', ')}` : 'Allow for this session'}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                      <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    Always
+                  </button>
+                  <button
+                    class="chat-permission-btn deny"
+                    onClick={() => {
+                      const p = activePermission();
+                      if (!p) return;
+                      respondToToolPermission(p.sessionId, p.id, 'reject')
+                        .then(() => setActivePermission(null))
+                        .catch(err => {
+                          console.error('Failed to deny permission:', err);
+                          setError('Failed to deny permission');
+                        });
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                    Deny
+                  </button>
+                </div>
               </div>
             </div>
           </Show>

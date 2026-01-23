@@ -2506,6 +2506,100 @@ body {
   opacity: 0.9;
 }
 
+/* Tool Permission Request (file edits, bash commands, etc.) */
+.chat-permission {
+  margin: 12px 0;
+  background: var(--bg-secondary);
+  border: 1px solid #f59e0b;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.chat-permission-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.chat-permission-body {
+  padding: 16px;
+}
+
+.chat-permission-description {
+  margin: 0 0 12px 0;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.chat-permission-path,
+.chat-permission-command {
+  display: block;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.chat-permission-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chat-permission-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.chat-permission-btn:hover {
+  opacity: 0.9;
+}
+
+.chat-permission-btn:active {
+  transform: scale(0.98);
+}
+
+.chat-permission-btn.allow {
+  background: #22c55e;
+  color: white;
+}
+
+.chat-permission-btn.always {
+  background: var(--accent);
+  color: white;
+}
+
+.chat-permission-btn.deny {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.chat-permission-btn.deny:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: white;
+}
+
 /* Mentioned files chips */
 .chat-mentioned-files {
   display: flex;

@@ -175,6 +175,23 @@ export interface Question {
 }
 
 /**
+ * Tool permission request (for file edits, bash commands, etc.)
+ */
+export interface ToolPermission {
+  id: string;
+  sessionId: string;
+  type: string; // 'edit', 'bash', 'read', etc.
+  title: string;
+  description?: string;
+  // For file operations
+  filePath?: string;
+  // For bash commands
+  command?: string;
+  // Suggested patterns to remember
+  remember?: string[];
+}
+
+/**
  * Create a new chat session
  */
 export async function createSession(title?: string): Promise<SessionInfo> {
@@ -390,22 +407,21 @@ export async function subscribeToEvents(
 }
 
 /**
- * Respond to a permission/question
+ * Respond to a tool permission (file edit, bash, etc.)
+ * Response should be "once", "always", or "reject"
  */
-export async function respondToPermission(
+export async function respondToToolPermission(
   sessionId: string,
   permissionId: string,
-  response: string[]
+  response: 'once' | 'always' | 'reject'
 ): Promise<void> {
   if (!client) {
     initClient();
   }
   
-  // The SDK expects "once", "always", or "reject" for standard permissions
-  // For questions, we need to send the selected answers as the response
   const url = `${serverUrl}/session/${sessionId}/permissions/${permissionId}`;
   
-  console.log('[OpenCode] Responding to permission:', { sessionId, permissionId, response });
+  console.log('[OpenCode] Responding to tool permission:', { sessionId, permissionId, response });
   
   const res = await fetch(url, {
     method: 'POST',
@@ -424,6 +440,42 @@ export async function respondToPermission(
   }
   
   console.log('[OpenCode] Permission response sent successfully');
+}
+
+/**
+ * Respond to a question from the question tool
+ * Response is an array of selected option labels
+ */
+export async function respondToPermission(
+  sessionId: string,
+  permissionId: string,
+  response: string[]
+): Promise<void> {
+  if (!client) {
+    initClient();
+  }
+  
+  const url = `${serverUrl}/session/${sessionId}/permissions/${permissionId}`;
+  
+  console.log('[OpenCode] Responding to question:', { sessionId, permissionId, response });
+  
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      response: response,
+    }),
+  });
+  
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[OpenCode] Question response failed:', res.status, text);
+    throw new Error(`Failed to respond to question: ${res.status} ${text}`);
+  }
+  
+  console.log('[OpenCode] Question response sent successfully');
 }
 
 /**
