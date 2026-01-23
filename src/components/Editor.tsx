@@ -65,6 +65,8 @@ interface EditorProps {
   scrollToBlockId?: string | null;
   // Upload callback for when files are dropped/pasted
   onFilesUploaded?: () => void;
+  // View mode: 'live' = rendered markdown, 'source' = raw markdown
+  viewMode?: 'live' | 'source';
 }
 
 const MilkdownEditor: Component<EditorProps> = (props) => {
@@ -671,7 +673,18 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
         </div>
       }
     >
-      <div class="editor-container milkdown-editor" ref={initEditor} />
+      <Show when={props.viewMode === 'source'} fallback={
+        <div class="editor-container milkdown-editor" ref={initEditor} />
+      }>
+        <div class="editor-container source-editor">
+          <textarea
+            class="source-textarea"
+            value={props.content}
+            onInput={(e) => props.onContentChange(e.currentTarget.value)}
+            spellcheck={localStorage.getItem('spell_check') !== 'false'}
+          />
+        </div>
+      </Show>
     </Show>
   );
 };

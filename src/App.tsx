@@ -72,6 +72,10 @@ const App: Component = () => {
   const [showCommandPalette, setShowCommandPalette] = createSignal(false);
   const [showSearch, setShowSearch] = createSignal(false);
   const [showTerminal, setShowTerminal] = createSignal(false);
+  // Editor view mode: 'live' = rendered markdown, 'source' = raw markdown
+  const [editorViewMode, setEditorViewMode] = createSignal<'live' | 'source'>(
+    (localStorage.getItem('editor_view_mode') as 'live' | 'source') || 'live'
+  );
   // Flag to prevent settings save effect from running before initial load completes
   const [settingsLoaded, setSettingsLoaded] = createSignal(false);
   const [showSettings, setShowSettings] = createSignal(false);
@@ -1893,6 +1897,7 @@ const App: Component = () => {
                 scrollToHeadingId={scrollToHeadingId()}
                 scrollToHeadingText={scrollToHeadingText()}
                 scrollToBlockId={scrollToBlockId()}
+                viewMode={editorViewMode()}
                 onFilesUploaded={async () => {
                   // Rebuild asset index after files are uploaded
                   if (vaultPath()) {
@@ -2024,6 +2029,33 @@ const App: Component = () => {
                 </svg>
               </Show>
             </span>
+            {/* Editor view mode toggle */}
+            <Show when={currentTab()}>
+              <button
+                class="status-item view-mode-toggle"
+                onClick={() => {
+                  const newMode = editorViewMode() === 'live' ? 'source' : 'live';
+                  setEditorViewMode(newMode);
+                  localStorage.setItem('editor_view_mode', newMode);
+                }}
+                title={editorViewMode() === 'live' ? 'Switch to Source View' : 'Switch to Live Preview'}
+              >
+                <Show when={editorViewMode() === 'live'} fallback={
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+                    <path d="M2 2l7.586 7.586"></path>
+                    <circle cx="11" cy="11" r="2"></circle>
+                  </svg>
+                }>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </Show>
+                <span>{editorViewMode() === 'live' ? 'Live' : 'Source'}</span>
+              </button>
+            </Show>
           </div>
         </div>
       </main>

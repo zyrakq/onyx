@@ -606,6 +606,28 @@ body {
   opacity: 0.8;
 }
 
+/* View mode toggle button */
+.view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.view-mode-toggle:hover {
+  color: var(--accent);
+}
+
+.view-mode-toggle svg {
+  flex-shrink: 0;
+}
+
 /* Resize Handle */
 .resize-handle {
   width: 4px;
@@ -761,6 +783,32 @@ body {
   overflow: auto;
   --nord0: #1e1e1e;
   background: var(--bg-primary);
+}
+
+/* Source Editor (raw markdown) */
+.source-editor {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.source-textarea {
+  width: 100%;
+  height: 100%;
+  padding: 24px 48px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.source-textarea:focus {
+  outline: none;
 }
 
 .milkdown-editor .milkdown {
