@@ -14,12 +14,14 @@ import {
   sendPromptAsync,
   subscribeToEvents,
   abortSession,
+  respondToPermission,
   getCurrentModel,
   type ChatMessage,
   type MessagePart,
   type SessionInfo,
   type ActiveTool,
   type ToolStatus,
+  type Question,
 } from '../lib/opencode/client';
 import { getCurrentLogin, getSavedProfile, type UserProfile } from '../lib/nostr/login';
 import { sanitizeImageUrl } from '../lib/security';
@@ -140,6 +142,11 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
   const [showFilePicker, setShowFilePicker] = createSignal(false);
   const [fileSearchQuery, setFileSearchQuery] = createSignal('');
   const [selectedFileIndex, setSelectedFileIndex] = createSignal(0);
+  
+  // Active question from OpenCode (permission.updated event)
+  const [activeQuestion, setActiveQuestion] = createSignal<Question | null>(null);
+  const [selectedAnswers, setSelectedAnswers] = createSignal<Set<string>>(new Set());
+  const [customAnswer, setCustomAnswer] = createSignal('');
   
   // Simple hash function for detecting content changes
   const hashContent = (content: string): string => {
@@ -313,6 +320,19 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     // Extract session ID from various possible locations in the event
     const eventSessionId = (event.properties?.sessionID || event.properties?.session_id || event.properties?.id) as string | undefined;
     
+    // Debug: log all events to understand question flow
+    if (event.type.includes('permission') || event.type.includes('question')) {
+      console.log('[OpenCodeChat] Permission/Question event:', event.type, event.properties);
+    }
+    
+    // Debug: log tool parts that might contain questions
+    if (event.type === 'message.part.updated') {
+      const part = event.properties?.part as { type?: string; tool?: string; metadata?: Record<string, unknown> } | undefined;
+      if (part?.tool === 'question') {
+        console.log('[OpenCodeChat] Question tool part:', part);
+      }
+    }
+    
     switch (event.type) {
       case 'message.part.updated': {
         // The delta text comes directly in properties.delta
@@ -325,6 +345,53 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
           const toolId = part.id || part.callID || '';
           const toolName = part.tool;
           const title = part.state?.title;
+          
+          // Special handling for "question" tool - extract question data from metadata
+          if (toolName === 'question' && toolStatus !== 'completed' && toolStatus !== 'error') {
+            // The question tool's input should contain the questions array
+            const toolPart = part as { 
+              input?: { questions?: Array<{
+                question?: string;
+                header?: string;
+                options?: Array<{ label?: string; description?: string }>;
+                multiple?: boolean;
+              }>; custom?: boolean };
+              state?: { input?: unknown };
+            };
+            
+            // Try to get questions from input or state.input
+            const input = toolPart.input || (toolPart.state as Record<string, unknown>)?.input as typeof toolPart.input;
+            const questions = input?.questions;
+            
+            console.log('[OpenCodeChat] Question tool input:', input);
+            
+            if (questions && questions.length > 0) {
+              const q = questions[0];
+              setActiveQuestion({
+                permissionId: toolId,
+                sessionId: currentSessionId || '',
+                header: q.header,
+                question: q.question || 'OpenCode needs your input',
+                options: (q.options || []).map(o => ({
+                  label: o.label || '',
+                  description: o.description,
+                })),
+                multiple: q.multiple,
+                custom: input?.custom !== false,
+              });
+              setSelectedAnswers(new Set<string>());
+              setCustomAnswer('');
+              // Don't show in active tools - we're showing it as a question UI
+              break;
+            }
+          }
+          
+          // Clear question if it was completed/errored
+          if (toolName === 'question' && (toolStatus === 'completed' || toolStatus === 'error')) {
+            setActiveQuestion(null);
+            setSelectedAnswers(new Set<string>());
+            setCustomAnswer('');
+          }
           
           setActiveTools(prev => {
             // Remove completed/error tools, update or add others
@@ -454,6 +521,56 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       // Config updated - refresh model from localStorage
       case 'config.updated': {
         setCurrentModel(getCurrentModel());
+        break;
+      }
+      
+      // Permission/Question from OpenCode
+      case 'permission.updated': {
+        const permission = event.properties as {
+          id?: string;
+          sessionID?: string;
+          type?: string;
+          title?: string;
+          metadata?: Record<string, unknown>;
+        };
+        
+        // Only handle permissions for our session
+        if (permission.sessionID !== currentSessionId) break;
+        
+        // Check if this is a question (from the question tool)
+        const metadata = permission.metadata || {};
+        const questions = metadata.questions as Array<{
+          question?: string;
+          header?: string;
+          options?: Array<{ label?: string; description?: string }>;
+          multiple?: boolean;
+        }> | undefined;
+        
+        if (questions && questions.length > 0) {
+          const q = questions[0]; // Handle first question
+          setActiveQuestion({
+            permissionId: permission.id || '',
+            sessionId: permission.sessionID || '',
+            header: q.header,
+            question: q.question || permission.title || 'OpenCode needs your input',
+            options: (q.options || []).map(o => ({
+              label: o.label || '',
+              description: o.description,
+            })),
+            multiple: q.multiple,
+            custom: metadata.custom !== false, // Default to allowing custom input
+          });
+          setSelectedAnswers(new Set<string>());
+          setCustomAnswer('');
+        }
+        break;
+      }
+      
+      case 'permission.replied': {
+        // Question was answered, clear it
+        setActiveQuestion(null);
+        setSelectedAnswers(new Set<string>());
+        setCustomAnswer('');
         break;
       }
       
@@ -1154,6 +1271,113 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                   </Show>
                 }>
                   <div class="chat-message-text markdown" innerHTML={markdownToHtml(streamingContent())} />
+                </Show>
+              </div>
+            </div>
+          </Show>
+
+          {/* Question from OpenCode */}
+          <Show when={activeQuestion()}>
+            <div class="chat-question">
+              <div class="chat-question-header">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <span>{activeQuestion()!.header || 'OpenCode needs your input'}</span>
+              </div>
+              <div class="chat-question-body">
+                <p>{activeQuestion()!.question}</p>
+                <div class="chat-question-options">
+                  <For each={activeQuestion()!.options}>
+                    {(option) => (
+                      <button
+                        class={`chat-question-option ${selectedAnswers().has(option.label) ? 'selected' : ''}`}
+                        onClick={() => {
+                          const q = activeQuestion();
+                          if (!q) return;
+                          
+                          if (q.multiple) {
+                            // Toggle selection for multiple choice
+                            setSelectedAnswers(prev => {
+                              const next = new Set(prev);
+                              if (next.has(option.label)) {
+                                next.delete(option.label);
+                              } else {
+                                next.add(option.label);
+                              }
+                              return next;
+                            });
+                          } else {
+                            // Single selection - submit immediately
+                            respondToPermission(q.sessionId, q.permissionId, [option.label])
+                              .then(() => {
+                                setActiveQuestion(null);
+                              })
+                              .catch(err => {
+                                console.error('Failed to respond to question:', err);
+                                setError('Failed to respond to question');
+                              });
+                          }
+                        }}
+                      >
+                        <span class="option-label">{option.label}</span>
+                        <Show when={option.description}>
+                          <span class="option-description">{option.description}</span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </div>
+                
+                {/* Custom answer input */}
+                <Show when={activeQuestion()!.custom}>
+                  <div class="chat-question-custom">
+                    <input
+                      type="text"
+                      placeholder="Type your own answer..."
+                      value={customAnswer()}
+                      onInput={(e) => setCustomAnswer(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && customAnswer().trim()) {
+                          const q = activeQuestion();
+                          if (!q) return;
+                          respondToPermission(q.sessionId, q.permissionId, [customAnswer().trim()])
+                            .then(() => {
+                              setActiveQuestion(null);
+                              setCustomAnswer('');
+                            })
+                            .catch(err => {
+                              console.error('Failed to respond to question:', err);
+                              setError('Failed to respond to question');
+                            });
+                        }
+                      }}
+                    />
+                  </div>
+                </Show>
+                
+                {/* Submit button for multiple choice */}
+                <Show when={activeQuestion()!.multiple && selectedAnswers().size > 0}>
+                  <button
+                    class="chat-question-submit"
+                    onClick={() => {
+                      const q = activeQuestion();
+                      if (!q) return;
+                      respondToPermission(q.sessionId, q.permissionId, Array.from(selectedAnswers()))
+                        .then(() => {
+                          setActiveQuestion(null);
+                          setSelectedAnswers(new Set<string>());
+                        })
+                        .catch(err => {
+                          console.error('Failed to respond to question:', err);
+                          setError('Failed to respond to question');
+                        });
+                    }}
+                  >
+                    Submit ({selectedAnswers().size} selected)
+                  </button>
                 </Show>
               </div>
             </div>

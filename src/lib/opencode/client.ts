@@ -140,6 +140,41 @@ export interface SessionInfo {
 }
 
 /**
+ * Permission/Question from OpenCode
+ */
+export interface Permission {
+  id: string;
+  type: string;
+  sessionId: string;
+  messageId: string;
+  callId?: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  createdAt: number;
+}
+
+/**
+ * Question option for the question tool
+ */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/**
+ * Parsed question from permission metadata
+ */
+export interface Question {
+  permissionId: string;
+  sessionId: string;
+  header?: string;
+  question: string;
+  options: QuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+}
+
+/**
  * Create a new chat session
  */
 export async function createSession(title?: string): Promise<SessionInfo> {
@@ -352,6 +387,43 @@ export async function subscribeToEvents(
     onError?.(err instanceof Error ? err : new Error(String(err)));
     return () => {};
   }
+}
+
+/**
+ * Respond to a permission/question
+ */
+export async function respondToPermission(
+  sessionId: string,
+  permissionId: string,
+  response: string[]
+): Promise<void> {
+  if (!client) {
+    initClient();
+  }
+  
+  // The SDK expects "once", "always", or "reject" for standard permissions
+  // For questions, we need to send the selected answers as the response
+  const url = `${serverUrl}/session/${sessionId}/permissions/${permissionId}`;
+  
+  console.log('[OpenCode] Responding to permission:', { sessionId, permissionId, response });
+  
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      response: response,
+    }),
+  });
+  
+  if (!res.ok) {
+    const text = await res.text();
+    console.error('[OpenCode] Permission response failed:', res.status, text);
+    throw new Error(`Failed to respond to permission: ${res.status} ${text}`);
+  }
+  
+  console.log('[OpenCode] Permission response sent successfully');
 }
 
 /**
