@@ -23,7 +23,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
-import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-deep-link';
 import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
@@ -99,6 +99,10 @@ const App: Component = () => {
   const [noteIndex, setNoteIndex] = createSignal<NoteIndex | null>(null);
   const [assetIndex, setAssetIndex] = createSignal<AssetIndex | null>(null);
   const [isResizing, setIsResizing] = createSignal<'sidebar' | 'terminal' | 'outline' | 'backlinks' | null>(null);
+  
+  // Queue for deep links received before vault is loaded
+  // Stores both the URL and clipboard content (since clipboard may change)
+  let pendingDeepLinks: { url: string; clipboardContent?: string }[] = [];
 
   // Backlinks panel state
   const [showBacklinks, setShowBacklinks] = createSignal(
@@ -346,6 +350,8 @@ const App: Component = () => {
         } catch (err) {
           console.error('Failed to build initial asset index:', err);
         }
+        // Process any deep links that arrived before vault was ready
+        processPendingDeepLinks();
       }
       if (settings.show_terminal) {
         setShowTerminal(true);
@@ -466,19 +472,41 @@ const App: Component = () => {
   // Handle deep links from Onyx Clipper browser extension
   const setupDeepLinkHandler = async () => {
     try {
+      // Register handler for URLs received while app is running
       await onOpenUrl(async (urls: string[]) => {
-        console.log('[DeepLink] Received URLs:', urls);
+        console.log('[DeepLink] onOpenUrl received:', urls);
         for (const url of urls) {
           await handleDeepLink(url);
         }
       });
       console.log('[DeepLink] Handler registered');
+      
+      // Check if app was launched via deep link (important for Linux/Windows)
+      // On these platforms, the URL is passed as CLI argument, not via onOpenUrl
+      const launchUrls = await getDeepLinkCurrent();
+      if (launchUrls && launchUrls.length > 0) {
+        console.log('[DeepLink] App launched with URLs:', launchUrls);
+        for (const url of launchUrls) {
+          await handleDeepLink(url);
+        }
+      }
     } catch (err) {
       console.error('[DeepLink] Failed to register handler:', err);
     }
   };
 
-  const handleDeepLink = async (url: string) => {
+  // Process any queued deep links after vault is loaded
+  const processPendingDeepLinks = async () => {
+    if (pendingDeepLinks.length === 0) return;
+    console.log('[DeepLink] Processing', pendingDeepLinks.length, 'pending deep links');
+    const links = [...pendingDeepLinks];
+    pendingDeepLinks = [];
+    for (const pending of links) {
+      await handleDeepLink(pending.url, pending.clipboardContent);
+    }
+  };
+
+  const handleDeepLink = async (url: string, cachedClipboard?: string) => {
     console.log('[DeepLink] Handling:', url);
     try {
       const parsed = new URL(url);
@@ -492,9 +520,26 @@ const App: Component = () => {
       const action = parsed.hostname;
       const params = parsed.searchParams;
       
+      // If vault isn't ready yet, queue the deep link with clipboard content
+      if (!vaultPath() && action === 'clip') {
+        console.log('[DeepLink] Vault not ready, queueing:', url);
+        // Read clipboard now before it changes
+        let clipboardContent: string | undefined;
+        if (params.has('clipboard')) {
+          try {
+            clipboardContent = await readText() || undefined;
+            console.log('[DeepLink] Cached clipboard content, length:', clipboardContent?.length || 0);
+          } catch (err) {
+            console.error('[DeepLink] Failed to read clipboard for queue:', err);
+          }
+        }
+        pendingDeepLinks.push({ url, clipboardContent });
+        return;
+      }
+      
       switch (action) {
         case 'clip':
-          await handleClipDeepLink(params);
+          await handleClipDeepLink(params, cachedClipboard);
           break;
         case 'ai':
           await handleAiDeepLink(params);
@@ -511,7 +556,7 @@ const App: Component = () => {
   };
 
   // Handle onyx://clip - Save clipped content from browser extension
-  const handleClipDeepLink = async (params: URLSearchParams) => {
+  const handleClipDeepLink = async (params: URLSearchParams, cachedClipboard?: string) => {
     const vault = vaultPath();
     if (!vault) {
       console.error('[DeepLink] No vault path set');
@@ -525,11 +570,17 @@ const App: Component = () => {
     
     let content = '';
     if (useClipboard) {
-      try {
-        content = await readText() || '';
-      } catch (err) {
-        console.error('[DeepLink] Failed to read clipboard:', err);
-        return;
+      // Use cached clipboard content if available (from queued deep link)
+      if (cachedClipboard) {
+        content = cachedClipboard;
+        console.log('[DeepLink] Using cached clipboard content');
+      } else {
+        try {
+          content = await readText() || '';
+        } catch (err) {
+          console.error('[DeepLink] Failed to read clipboard:', err);
+          return;
+        }
       }
     }
     
