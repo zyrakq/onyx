@@ -23,6 +23,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
+import { onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
@@ -456,7 +458,203 @@ const App: Component = () => {
     onCleanup(() => {
       window.removeEventListener('show-onboarding', handleShowOnboarding);
     });
+    
+    // Set up deep link handler for Onyx Clipper integration
+    setupDeepLinkHandler();
   });
+
+  // Handle deep links from Onyx Clipper browser extension
+  const setupDeepLinkHandler = async () => {
+    try {
+      await onOpenUrl(async (urls: string[]) => {
+        console.log('[DeepLink] Received URLs:', urls);
+        for (const url of urls) {
+          await handleDeepLink(url);
+        }
+      });
+      console.log('[DeepLink] Handler registered');
+    } catch (err) {
+      console.error('[DeepLink] Failed to register handler:', err);
+    }
+  };
+
+  const handleDeepLink = async (url: string) => {
+    console.log('[DeepLink] Handling:', url);
+    try {
+      const parsed = new URL(url);
+      const protocol = parsed.protocol.replace(':', '');
+      
+      if (protocol !== 'onyx') {
+        console.log('[DeepLink] Ignoring non-onyx URL:', url);
+        return;
+      }
+      
+      const action = parsed.hostname;
+      const params = parsed.searchParams;
+      
+      switch (action) {
+        case 'clip':
+          await handleClipDeepLink(params);
+          break;
+        case 'ai':
+          await handleAiDeepLink(params);
+          break;
+        case 'open':
+          await handleOpenDeepLink(params);
+          break;
+        default:
+          console.log('[DeepLink] Unknown action:', action);
+      }
+    } catch (err) {
+      console.error('[DeepLink] Error parsing URL:', err);
+    }
+  };
+
+  // Handle onyx://clip - Save clipped content from browser extension
+  const handleClipDeepLink = async (params: URLSearchParams) => {
+    const vault = vaultPath();
+    if (!vault) {
+      console.error('[DeepLink] No vault path set');
+      return;
+    }
+    
+    const title = params.get('title') || 'Untitled';
+    const path = params.get('path') || 'Clippings';
+    const useClipboard = params.has('clipboard');
+    let filename = params.get('filename') || `${sanitizeFilename(title)}.md`;
+    
+    let content = '';
+    if (useClipboard) {
+      try {
+        content = await readText() || '';
+      } catch (err) {
+        console.error('[DeepLink] Failed to read clipboard:', err);
+        return;
+      }
+    }
+    
+    if (!content) {
+      console.error('[DeepLink] No content to clip');
+      return;
+    }
+    
+    // Ensure the target directory exists
+    const targetDir = `${vault}/${path}`;
+    try {
+      const dirExists = await exists(targetDir);
+      if (!dirExists) {
+        await mkdir(targetDir, { recursive: true });
+      }
+    } catch (err) {
+      console.error('[DeepLink] Failed to create directory:', err);
+    }
+    
+    // Handle duplicate filenames
+    let finalPath = `${targetDir}/${filename}`;
+    let counter = 1;
+    while (await exists(finalPath)) {
+      const baseName = filename.replace(/\.md$/, '');
+      finalPath = `${targetDir}/${baseName} ${counter}.md`;
+      counter++;
+    }
+    
+    // Save the file
+    try {
+      await writeTextFile(finalPath, content);
+      console.log('[DeepLink] Clipped to:', finalPath);
+      
+      // Refresh sidebar to show new file
+      refreshSidebar?.();
+      
+      // Open the new file
+      await openFile(finalPath);
+      
+      // Rebuild note index
+      rebuildNoteIndex();
+    } catch (err) {
+      console.error('[DeepLink] Failed to save clipped content:', err);
+    }
+  };
+
+  // Handle onyx://ai - Process AI prompt using OpenCode
+  const handleAiDeepLink = async (params: URLSearchParams) => {
+    const callbackId = params.get('callback_id');
+    const useClipboard = params.has('clipboard');
+    
+    if (!callbackId) {
+      console.error('[DeepLink] No callback_id provided');
+      return;
+    }
+    
+    let requestData: { prompt?: string; context?: string } = {};
+    
+    if (useClipboard) {
+      try {
+        const clipboardText = await readText();
+        if (clipboardText) {
+          requestData = JSON.parse(clipboardText);
+        }
+      } catch (err) {
+        console.error('[DeepLink] Failed to parse clipboard data:', err);
+      }
+    }
+    
+    const prompt = params.get('prompt') || requestData.prompt;
+    const context = requestData.context || '';
+    
+    if (!prompt) {
+      console.error('[DeepLink] No prompt provided');
+      await writeAiResponse(callbackId, '', 'No prompt provided');
+      return;
+    }
+    
+    // TODO: Integrate with OpenCode SDK to process the prompt
+    // For now, return a placeholder response
+    console.log('[DeepLink] AI prompt:', prompt);
+    console.log('[DeepLink] Context length:', context.length);
+    
+    // Placeholder - in the future this would call OpenCode
+    const result = `[AI processing not yet implemented. Prompt: "${prompt.substring(0, 50)}..."]`;
+    await writeAiResponse(callbackId, result);
+  };
+
+  const writeAiResponse = async (callbackId: string, result: string, error?: string) => {
+    const response = { callbackId, result, error };
+    try {
+      await writeText(JSON.stringify(response));
+      console.log('[DeepLink] AI response written to clipboard');
+    } catch (err) {
+      console.error('[DeepLink] Failed to write AI response:', err);
+    }
+  };
+
+  // Handle onyx://open - Open a file in the vault
+  const handleOpenDeepLink = async (params: URLSearchParams) => {
+    const vault = vaultPath();
+    if (!vault) {
+      console.error('[DeepLink] No vault path set');
+      return;
+    }
+    
+    const path = params.get('path');
+    if (!path) {
+      console.error('[DeepLink] No path provided');
+      return;
+    }
+    
+    const fullPath = path.startsWith(vault) ? path : `${vault}/${path}`;
+    await openFile(fullPath);
+  };
+
+  // Sanitize filename for saving
+  const sanitizeFilename = (name: string): string => {
+    return name
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+      .replace(/[\s_]+/g, ' ')
+      .replace(/^[\s.]+|[\s.]+$/g, '')
+      .substring(0, 200)
+      || 'Untitled';
+  };
 
   // Handle onboarding completion
   const handleOnboardingComplete = async (result: OnboardingResult) => {
