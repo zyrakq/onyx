@@ -1592,11 +1592,11 @@ fn get_skills_dir() -> PathBuf {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // macOS/Linux: ~/.opencode/skills
+        // macOS/Linux: ~/.config/opencode/skills
         if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".opencode").join("skills")
+            PathBuf::from(home).join(".config").join("opencode").join("skills")
         } else {
-            PathBuf::from(".").join(".opencode").join("skills")
+            PathBuf::from(".").join(".config").join("opencode").join("skills")
         }
     }
 }
