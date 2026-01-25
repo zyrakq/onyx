@@ -5,7 +5,7 @@ A private, encrypted note-taking app with Nostr sync.
 Onyx lets you write markdown notes locally and sync them securely across devices using the Nostr protocol. Your notes are encrypted with your Nostr keys before being published to relays, ensuring only you can read them.
 
 ![Onyx Editor](images/editor.png)
-![Main Interface](images/main-interface.png)
+![Productivity Settings](images/productivity-settings.png)
 
 ## Features
 
@@ -22,14 +22,12 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 - **Import Shared Docs** - Import received documents directly into your vault
 - **Revoke Shares** - Remove shared documents you've sent to others
 
-![Notifications Panel](images/notifications.png)
-
 ### Publishing
 - **Publish as Articles** - Post markdown notes as NIP-23 long-form articles
 - **Draft Support** - Publish as drafts (kind 30024) or published articles (kind 30023)
 - **Auto-generated Tags** - Suggests hashtags based on document content
 
-![Publishing Interface](images/publishing.png)
+![Main Editor with AI Assistant](images/main-editor-with-ai.png)
 
 ### Privacy & Security
 - **End-to-End Encryption** - All synced content encrypted with NIP-44
@@ -129,14 +127,18 @@ npm run tauri build
 
 Your notes are encrypted with NIP-44 before being published to relays. Only you can decrypt them with your private key.
 
+### AI Assistant
+
+The app includes an integrated AI chatbot for assistance with writing and editing.
+
+![AI Chatbot Interface](images/ai-chatbot-interface.png)
+
 ### Sharing Documents
 
 1. Right-click a file in the sidebar
 2. Select **Nostr > Share with user...**
 3. Enter recipient's npub, NIP-05 (user@domain.com), or hex pubkey
 4. Click **Share** to send the encrypted document
-
-![Document Sharing](images/document-sharing.png)
 
 The recipient will see it in their notifications panel and can import it to their vault.
 
