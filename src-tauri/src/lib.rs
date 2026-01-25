@@ -695,6 +695,9 @@ fn start_opencode_server(
 
     #[cfg(target_os = "windows")]
     let child = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         let mut cmd = Command::new(&command);
         cmd.args(["serve", "--port", &port.to_string()]);
         if let Some(dir) = cwd {
@@ -703,6 +706,7 @@ fn start_opencode_server(
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
+        cmd.creation_flags(CREATE_NO_WINDOW);
         cmd.spawn()
             .map_err(|e| format!("Failed to spawn opencode: {}", e))?
     };

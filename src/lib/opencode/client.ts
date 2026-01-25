@@ -530,10 +530,12 @@ export function getCurrentModel(): string | null {
 }
 
 /**
- * Set the current model (saves to localStorage)
+ * Set the current model (saves to localStorage and dispatches event)
  */
 export function setCurrentModel(model: string): void {
   localStorage.setItem('opencode_model', model);
+  // Dispatch a custom event so other components can react to model changes
+  window.dispatchEvent(new CustomEvent('opencode-model-changed', { detail: { model } }));
 }
 
 /**

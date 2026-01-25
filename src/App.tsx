@@ -594,8 +594,8 @@ const App: Component = () => {
 
   // Handle sharing a file
   const handleShareFile = (fullPath: string, content: string) => {
-    // Extract title from path
-    const parts = fullPath.split('/');
+    // Extract title from path (handle both Unix and Windows paths)
+    const parts = fullPath.replace(/\\/g, '/').split('/');
     const filename = parts[parts.length - 1] || 'Untitled';
     const title = filename.replace(/\.[^/.]+$/, '');
     
@@ -1592,7 +1592,7 @@ const App: Component = () => {
         <MobileDrawer
           isOpen={mobileDrawerOpen()}
           onClose={() => setMobileDrawerOpen(false)}
-          title={sidebarView() === 'files' ? (vaultPath()?.split('/').pop() || 'Files') : sidebarView() === 'search' ? 'Search' : 'Bookmarks'}
+          title={sidebarView() === 'files' ? (vaultPath()?.replace(/\\/g, '/').split('/').pop() || 'Files') : sidebarView() === 'search' ? 'Search' : 'Bookmarks'}
           headerAction={
             sidebarView() === 'files' && vaultPath() ? (
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -1969,7 +1969,7 @@ const App: Component = () => {
                 currentFile={currentTab() ? { path: currentTab()!.path, content: currentTab()!.content } : null}
                 vaultFiles={noteIndex() ? Array.from(noteIndex()!.allPaths).map(path => ({
                   path,
-                  name: path.split('/').pop()?.replace(/\.md$/i, '') || path
+                  name: path.replace(/\\/g, '/').split('/').pop()?.replace(/\.md$/i, '') || path
                 })) : []}
                 onClose={() => setShowTerminal(false)}
                 onOpenSettings={() => {

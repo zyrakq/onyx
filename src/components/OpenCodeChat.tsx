@@ -986,6 +986,12 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
     }
   };
 
+  // Handler for model changes from Settings
+  const handleModelChanged = (event: Event) => {
+    const customEvent = event as CustomEvent<{ model: string }>;
+    setCurrentModel(customEvent.detail.model);
+  };
+
   onMount(async () => {
     // Load user profile if logged in
     const login = await getCurrentLogin();
@@ -996,12 +1002,16 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
       }
     }
     
+    // Listen for model changes from Settings
+    window.addEventListener('opencode-model-changed', handleModelChanged);
+    
     checkAndStartServer();
     inputRef?.focus();
   });
 
   onCleanup(() => {
     eventCleanup?.();
+    window.removeEventListener('opencode-model-changed', handleModelChanged);
   });
 
   // Check if a message has any visible content
@@ -1543,7 +1553,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                   <polyline points="14 2 14 8 20 8"></polyline>
                 </svg>
-                <span>{props.currentFile!.path.split('/').pop()}</span>
+                <span>{props.currentFile!.path.replace(/\\/g, '/').split('/').pop()}</span>
                 <Show when={includeContext()}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                     <polyline points="20 6 9 17 4 12"></polyline>
@@ -1624,7 +1634,7 @@ const OpenCodeChat: Component<OpenCodeChatProps> = (props) => {
                         <polyline points="14 2 14 8 20 8"></polyline>
                       </svg>
                       <span class="file-name">{file.name}</span>
-                      <span class="file-path">{file.path.split('/').slice(-2, -1)[0] || ''}</span>
+                      <span class="file-path">{file.path.replace(/\\/g, '/').split('/').slice(-2, -1)[0] || ''}</span>
                     </div>
                   )}
                 </For>

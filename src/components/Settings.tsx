@@ -1464,7 +1464,7 @@ const Settings: Component<SettingsProps> = (props) => {
 
       if (selected && typeof selected === 'string') {
         // Read the file and import it
-        const fileName = selected.split('/').pop() || selected.split('\\').pop() || 'skill';
+        const fileName = selected.replace(/\\/g, '/').split('/').pop() || 'skill';
 
         if (selected.endsWith('.md')) {
           // Import single SKILL.md file

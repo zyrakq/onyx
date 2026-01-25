@@ -58,7 +58,7 @@ const FileInfoDialog: Component<FileInfoDialogProps> = (props) => {
         modified: number;
       }>('get_file_stats', { path: props.filePath });
       
-      const name = props.filePath.split('/').pop() || '';
+      const name = props.filePath.replace(/\\/g, '/').split('/').pop() || '';
       const extension = name.includes('.') ? name.split('.').pop() || '' : '';
       
       setLocalInfo({

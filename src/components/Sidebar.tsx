@@ -252,7 +252,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   const handleDelete = (path: string) => {
-    const name = path.split('/').pop() || 'this item';
+    const name = path.replace(/\\/g, '/').split('/').pop() || 'this item';
     setDeleteConfirm({ path, name });
     closeContextMenu();
   };
@@ -272,7 +272,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
   };
 
   const handleMakeCopy = async (path: string) => {
-    const fileName = path.split('/').pop() || '';
+    const fileName = path.replace(/\\/g, '/').split('/').pop() || '';
     const parentPath = path.substring(0, path.lastIndexOf('/'));
     const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
     const baseName = ext ? fileName.substring(0, fileName.lastIndexOf('.')) : fileName;
@@ -324,7 +324,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
       });
 
       if (selected && typeof selected === 'string') {
-        const fileName = sourcePath.split('/').pop() || '';
+        const fileName = sourcePath.replace(/\\/g, '/').split('/').pop() || '';
         const destPath = `${selected}/${fileName}`;
         setMoveConfirm({ sourcePath, destPath, name: fileName });
       }
@@ -399,7 +399,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.split('/').pop() || '';
+    const fileName = sourcePath.replace(/\\/g, '/').split('/').pop() || '';
     const newPath = `${targetPath}/${fileName}`;
 
     // Don't move to same location
@@ -423,7 +423,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
     const sourcePath = draggedItem();
     if (!sourcePath) return;
 
-    const fileName = sourcePath.split('/').pop() || '';
+    const fileName = sourcePath.replace(/\\/g, '/').split('/').pop() || '';
     const newPath = `${props.vaultPath}/${fileName}`;
 
     // Don't move if already in root
@@ -566,7 +566,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
   const viewTitle = () => {
     switch (props.view) {
-      case 'files': return props.vaultPath ? props.vaultPath.split('/').pop() : 'No Vault Open';
+      case 'files': return props.vaultPath ? props.vaultPath.replace(/\\/g, '/').split('/').pop() : 'No Vault Open';
       case 'search': return 'Search';
       case 'bookmarks': return 'Bookmarks';
     }
@@ -889,7 +889,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                       onClick={() => props.onFileSelect(path)}
                     >
                       <span>🔖</span>
-                      <span>{path.split('/').pop()}</span>
+                      <span>{path.replace(/\\/g, '/').split('/').pop()}</span>
                     </div>
                   )}
                 </For>
@@ -994,7 +994,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
                   closeContextMenu();
                   try {
                     const content = await invoke<string>('read_file', { path });
-                    const fileName = path.split('/').pop() || '';
+                    const fileName = path.replace(/\\/g, '/').split('/').pop() || '';
                     const title = fileName.replace(/\.md$/, '');
                     props.onPostToNostr?.(path, content, title);
                   } catch (err) {
@@ -1023,7 +1023,7 @@ const Sidebar: Component<SidebarProps> = (props) => {
 
           <div class="context-menu-divider" />
 
-          <div class="context-menu-item" onClick={() => handleRename(contextMenu()!.path, contextMenu()!.path.split('/').pop()!)}>
+          <div class="context-menu-item" onClick={() => handleRename(contextMenu()!.path, contextMenu()!.path.replace(/\\/g, '/').split('/').pop()!)}>
             Rename
           </div>
           <div class="context-menu-item danger" onClick={() => handleDelete(contextMenu()!.path)}>

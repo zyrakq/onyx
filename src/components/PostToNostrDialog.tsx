@@ -134,7 +134,7 @@ const PostToNostrDialog: Component<PostToNostrDialogProps> = (props) => {
                 </div>
                 <div class="post-nostr-section-title">
                   <span>Article Details</span>
-                  <span class="post-nostr-section-subtitle">{props.filePath.split('/').pop()}</span>
+                  <span class="post-nostr-section-subtitle">{props.filePath.replace(/\\/g, '/').split('/').pop()}</span>
                 </div>
                 <div class="post-nostr-article-meta">
                   <span class="post-nostr-meta-badge">{wordCount()} words</span>
