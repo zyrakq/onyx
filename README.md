@@ -27,8 +27,6 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 - **Draft Support** - Publish as drafts (kind 30024) or published articles (kind 30023)
 - **Auto-generated Tags** - Suggests hashtags based on document content
 
-![Main Editor with AI Assistant](images/main-editor-with-ai.png)
-
 ### Privacy & Security
 - **End-to-End Encryption** - All synced content encrypted with NIP-44
 - **Block Users** - Block bad actors using NIP-51 mute lists
@@ -132,6 +130,7 @@ Your notes are encrypted with NIP-44 before being published to relays. Only you 
 The app includes an integrated AI chatbot for assistance with writing and editing.
 
 ![AI Chatbot Interface](images/ai-chatbot-interface.png)
+![Main Editor with AI Assistant](images/main-editor-with-ai.png)
 
 ### Sharing Documents
 
