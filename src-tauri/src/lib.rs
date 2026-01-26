@@ -157,18 +157,11 @@ fn is_config_path(path: &str, app: &AppHandle) -> bool {
 #[tauri::command]
 fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
     let path = get_settings_path(&app);
-    println!("[Onyx] Loading settings from: {:?}", path);
-    println!("[Onyx] HOME={:?}, USERPROFILE={:?}", 
-        std::env::var("HOME").ok(), 
-        std::env::var("USERPROFILE").ok());
     if !path.exists() {
-        println!("[Onyx] Settings file does not exist, returning defaults");
         return Ok(AppSettings::default());
     }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let settings: AppSettings = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-    println!("[Onyx] Loaded settings: vault_path={:?}", settings.vault_path);
-    Ok(settings)
+    serde_json::from_str(&content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
