@@ -1943,7 +1943,22 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        // Single instance plugin - ensures only one instance runs
+        // When a second instance is launched, it passes args to the first instance
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Focus the main window
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+            
+            // Check for deep link URLs in args and emit them to the frontend
+            for arg in args.iter().skip(1) {
+                if arg.starts_with("onyx://") {
+                    let _ = app.emit("deep-link-received", arg.clone());
+                }
+            }
+        }));
 
     // Mobile-only plugins
     #[cfg(mobile)]

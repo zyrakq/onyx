@@ -472,12 +472,19 @@ const App: Component = () => {
   // Handle deep links from Onyx Clipper browser extension
   const setupDeepLinkHandler = async () => {
     try {
-      // Register handler for URLs received while app is running
+      // Register handler for URLs received while app is running (macOS)
       await onOpenUrl(async (urls: string[]) => {
         console.log('[DeepLink] onOpenUrl received:', urls);
         for (const url of urls) {
           await handleDeepLink(url);
         }
+      });
+      
+      // Listen for deep links from single-instance plugin (Linux/Windows)
+      // When a second instance tries to launch, the URL is passed via this event
+      await listen<string>('deep-link-received', async (event) => {
+        console.log('[DeepLink] Received from single-instance:', event.payload);
+        await handleDeepLink(event.payload);
       });
       
       // Check if app was launched via deep link (important for Linux/Windows)
