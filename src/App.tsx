@@ -24,9 +24,8 @@ import { listen } from '@tauri-apps/api/event';
 import { onBackButtonPress } from '@tauri-apps/api/app';
 import { writeTextFile, mkdir, exists } from '@tauri-apps/plugin-fs';
 import { onOpenUrl, getCurrent as getDeepLinkCurrent } from '@tauri-apps/plugin-deep-link';
-import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { readText } from '@tauri-apps/plugin-clipboard-manager';
 import { getSyncEngine, getCurrentLogin } from './lib/nostr';
-import { isServerRunning, createSession, sendPrompt } from './lib/opencode/client';
 import { getSignerFromStoredLogin } from './lib/nostr/signer';
 import { buildNoteIndex, resolveWikilink, NoteIndex, FileEntry, NoteGraph, buildNoteGraph } from './lib/editor/note-index';
 import { HeadingInfo } from './lib/editor/heading-plugin';
@@ -558,9 +557,6 @@ const App: Component = () => {
         case 'clip':
           await handleClipDeepLink(params, cachedClipboard);
           break;
-        case 'ai':
-          await handleAiDeepLink(params);
-          break;
         case 'open':
           await handleOpenDeepLink(params);
           break;
@@ -640,99 +636,6 @@ const App: Component = () => {
       rebuildNoteIndex();
     } catch (err) {
       console.error('[DeepLink] Failed to save clipped content:', err);
-    }
-  };
-
-  // Handle onyx://ai - Process AI prompt using OpenCode
-  const handleAiDeepLink = async (params: URLSearchParams) => {
-    const callbackId = params.get('callback_id');
-    const useClipboard = params.has('clipboard');
-    
-    if (!callbackId) {
-      console.error('[DeepLink] No callback_id provided');
-      return;
-    }
-    
-    let requestData: { prompt?: string; context?: string; callbackId?: string } = {};
-    
-    if (useClipboard) {
-      try {
-        const clipboardText = await readText();
-        console.log('[DeepLink] Clipboard text length:', clipboardText?.length || 0);
-        console.log('[DeepLink] Clipboard preview:', clipboardText?.substring(0, 200));
-        if (clipboardText) {
-          requestData = JSON.parse(clipboardText);
-          console.log('[DeepLink] Parsed request data:', { 
-            hasPrompt: !!requestData.prompt, 
-            promptLength: requestData.prompt?.length,
-            hasContext: !!requestData.context,
-            callbackId: requestData.callbackId 
-          });
-        }
-      } catch (err) {
-        console.error('[DeepLink] Failed to parse clipboard data:', err);
-        await writeAiResponse(callbackId, '', 'Failed to parse AI request from clipboard');
-        return;
-      }
-    }
-    
-    const prompt = params.get('prompt') || requestData.prompt;
-    const context = requestData.context || '';
-    
-    if (!prompt) {
-      console.error('[DeepLink] No prompt provided');
-      await writeAiResponse(callbackId, '', 'No prompt provided');
-      return;
-    }
-    
-    console.log('[DeepLink] AI prompt:', prompt);
-    console.log('[DeepLink] Context length:', context.length);
-    
-    // Check if OpenCode server is running
-    const serverRunning = await isServerRunning(3000);
-    if (!serverRunning) {
-      console.error('[DeepLink] OpenCode server is not running');
-      await writeAiResponse(callbackId, '', 'OpenCode is not running. Open the OpenCode panel in Onyx first.');
-      return;
-    }
-    
-    try {
-      // Create a temporary session for this request
-      const session = await createSession('Clipper AI Request');
-      
-      // Build the full prompt with context
-      const fullPrompt = context 
-        ? `${prompt}\n\nContext:\n${context}`
-        : prompt;
-      
-      // Send the prompt and wait for response
-      const response = await sendPrompt(session.id, fullPrompt);
-      
-      // Extract text from response parts
-      const resultText = response.parts
-        .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-        .map(part => part.text)
-        .join('\n');
-      
-      if (resultText) {
-        await writeAiResponse(callbackId, resultText);
-      } else {
-        await writeAiResponse(callbackId, '', 'No response generated');
-      }
-    } catch (err) {
-      console.error('[DeepLink] Failed to process AI prompt:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      await writeAiResponse(callbackId, '', `Failed to process: ${errorMessage}`);
-    }
-  };
-
-  const writeAiResponse = async (callbackId: string, result: string, error?: string) => {
-    const response = { callbackId, result, error };
-    try {
-      await writeText(JSON.stringify(response));
-      console.log('[DeepLink] AI response written to clipboard');
-    } catch (err) {
-      console.error('[DeepLink] Failed to write AI response:', err);
     }
   };
 
