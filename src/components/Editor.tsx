@@ -15,6 +15,7 @@ import { taskPlugin } from '../lib/taskPlugin';
 import { headingPlugin, headingPluginKey, HeadingInfo } from '../lib/editor/heading-plugin';
 import { blockPlugin, blockPluginKey } from '../lib/editor/block-plugin';
 import { linkAutocompletePlugin, setAutocompleteContext } from '../lib/editor/link-autocomplete-plugin';
+import { slashCommandsPlugin } from '../lib/editor/slash-commands';
 import {
   embedSchema,
   embedView,
@@ -140,6 +141,7 @@ const MilkdownEditor: Component<EditorProps> = (props) => {
       .use(headingPlugin)
       .use(blockPlugin)
       .use(linkAutocompletePlugin)
+      .use(slashCommandsPlugin)
       .use(highlightPlugin)
       .use(commentPlugin)
       .use(calloutPlugin)

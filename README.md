@@ -16,6 +16,15 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 - **Secure Storage** - Private keys stored in your OS keyring (Keychain, libsecret, Credential Manager)
 - **Cross-Platform** - Linux, macOS, and Windows
 
+### Productivity Tools
+- **Daily Notes** - Quickly create/open today's daily note with `Ctrl+D`
+- **Templates** - Create notes from templates with `Ctrl+T`
+- **Slash Commands** - Type `/` to insert headings, lists, callouts, tables, and more
+- **Properties Panel** - Visual editor for YAML frontmatter (`Ctrl+Shift+P`)
+- **Outline Panel** - Navigate document headings (`Ctrl+Shift+O`)
+- **Backlinks Panel** - See which notes link to the current note (`Ctrl+Shift+B`)
+- **Link Unlinked Mentions** - Convert text mentions to `[[wikilinks]]` with one click
+
 ### Document Sharing
 - **Share with Nostr Users** - Send encrypted documents to any Nostr user via npub, NIP-05, or hex pubkey
 - **Notifications Panel** - See documents shared with you, with sender profiles and timestamps
@@ -158,8 +167,37 @@ Blocked users can be managed in **Settings > Nostr > Blocked Users**.
 | Save | `Ctrl+S` |
 | Quick Switcher | `Ctrl+O` |
 | Search in Files | `Ctrl+Shift+F` |
-| Toggle Terminal | `Ctrl+\`` |
-| Command Palette | `Ctrl+Shift+P` |
+| Toggle AI Assistant | `Ctrl+\`` |
+| Command Palette | `Ctrl+K` |
+| Daily Note | `Ctrl+D` |
+| Templates | `Ctrl+T` |
+| Toggle Outline | `Ctrl+Shift+O` |
+| Toggle Backlinks | `Ctrl+Shift+B` |
+| Toggle Properties | `Ctrl+Shift+P` |
+
+### Slash Commands
+
+Type `/` at the start of a line or after a space to open the command menu:
+
+| Command | Description |
+|---------|-------------|
+| `/heading1` - `/heading3` | Insert headings |
+| `/bullet` | Bulleted list |
+| `/numbered` | Numbered list |
+| `/todo` | Task/checkbox |
+| `/quote` | Blockquote |
+| `/code` | Code block |
+| `/table` | Insert table |
+| `/divider` | Horizontal rule |
+| `/callout-info` | Info callout |
+| `/callout-tip` | Tip callout |
+| `/callout-warning` | Warning callout |
+| `/date` | Today's date |
+| `/time` | Current time |
+| `/link` | Hyperlink |
+| `/image` | Image |
+| `/wikilink` | Wiki link `[[]]` |
+| `/bold`, `/italic`, `/highlight` | Text formatting |
 
 ## How Sync Works
 
