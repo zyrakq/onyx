@@ -1911,6 +1911,23 @@ mod keyring_commands {
     }
 }
 
+/// Get any deep link URLs passed as command line arguments
+/// On Linux, when the app is launched via xdg-open, the URL is passed as an argument
+#[tauri::command]
+fn get_deep_link_args() -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut deep_links = Vec::new();
+    
+    // Skip the first arg (program name), check for URLs starting with onyx://
+    for arg in args.iter().skip(1) {
+        if arg.starts_with("onyx://") {
+            deep_links.push(arg.clone());
+        }
+    }
+    
+    deep_links
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Create shared state for OpenCode server
@@ -2094,6 +2111,7 @@ pub fn run() {
             opencode_installer::get_opencode_install_path,
             opencode_installer::install_opencode,
             opencode_installer::get_opencode_version,
+            get_deep_link_args,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

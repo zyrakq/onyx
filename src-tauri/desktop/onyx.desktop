@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Onyx
+Comment=Open source knowledge base and note-taking app
+Exec=onyx %u
+Icon=onyx
+Terminal=false
+Type=Application
+Categories=Office;TextEditor;Utility;
+MimeType=x-scheme-handler/onyx;
+StartupWMClass=onyx
+StartupNotify=true

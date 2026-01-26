@@ -479,11 +479,23 @@ const App: Component = () => {
           await handleDeepLink(url);
         }
       });
-      console.log('[DeepLink] Handler registered');
       
       // Check if app was launched via deep link (important for Linux/Windows)
       // On these platforms, the URL is passed as CLI argument, not via onOpenUrl
-      const launchUrls = await getDeepLinkCurrent();
+      let launchUrls = await getDeepLinkCurrent();
+      
+      // Fallback: check CLI args directly (more reliable on Linux)
+      if (!launchUrls || launchUrls.length === 0) {
+        try {
+          const cliUrls = await invoke<string[]>('get_deep_link_args');
+          if (cliUrls && cliUrls.length > 0) {
+            launchUrls = cliUrls;
+          }
+        } catch (e) {
+          console.error('[DeepLink] Failed to get CLI args:', e);
+        }
+      }
+      
       if (launchUrls && launchUrls.length > 0) {
         console.log('[DeepLink] App launched with URLs:', launchUrls);
         for (const url of launchUrls) {
@@ -513,7 +525,6 @@ const App: Component = () => {
       const protocol = parsed.protocol.replace(':', '');
       
       if (protocol !== 'onyx') {
-        console.log('[DeepLink] Ignoring non-onyx URL:', url);
         return;
       }
       
@@ -522,13 +533,11 @@ const App: Component = () => {
       
       // If vault isn't ready yet, queue the deep link with clipboard content
       if (!vaultPath() && action === 'clip') {
-        console.log('[DeepLink] Vault not ready, queueing:', url);
-        // Read clipboard now before it changes
+        console.log('[DeepLink] Vault not ready, queueing');
         let clipboardContent: string | undefined;
         if (params.has('clipboard')) {
           try {
             clipboardContent = await readText() || undefined;
-            console.log('[DeepLink] Cached clipboard content, length:', clipboardContent?.length || 0);
           } catch (err) {
             console.error('[DeepLink] Failed to read clipboard for queue:', err);
           }
@@ -573,7 +582,6 @@ const App: Component = () => {
       // Use cached clipboard content if available (from queued deep link)
       if (cachedClipboard) {
         content = cachedClipboard;
-        console.log('[DeepLink] Using cached clipboard content');
       } else {
         try {
           content = await readText() || '';
