@@ -2355,6 +2355,27 @@ const App: Component = () => {
                 fileContents={fileContents()}
                 onBacklinkClick={(path, line) => openFile(path, line)}
                 onClose={() => setShowBacklinks(false)}
+                onLinkMention={async (sourcePath) => {
+                  // Refresh the file contents for the modified file
+                  try {
+                    const newContent = await invoke<string>('read_file', { path: sourcePath });
+                    const newContents = new Map(fileContents());
+                    newContents.set(sourcePath, newContent);
+                    setFileContents(newContents);
+                    
+                    // Rebuild the graph with updated content
+                    const index = noteIndex();
+                    const vault = vaultPath();
+                    if (index && vault) {
+                      const graph = await buildNoteGraph(vault, index, async (path: string) => {
+                        return newContents.get(path) || await invoke<string>('read_file', { path });
+                      });
+                      setNoteGraph(graph);
+                    }
+                  } catch (err) {
+                    console.error('Failed to refresh after linking:', err);
+                  }
+                }}
               />
             </div>
           </Show>

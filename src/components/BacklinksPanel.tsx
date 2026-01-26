@@ -1,6 +1,7 @@
 import { Component, For, Show, createSignal, createMemo } from 'solid-js';
+import { invoke } from '@tauri-apps/api/core';
 import { NoteGraph } from '../lib/editor/note-index';
-import { BacklinksData, getBacklinksForNote } from '../lib/editor/backlinks';
+import { BacklinksData, getBacklinksForNote, BacklinkInfo } from '../lib/editor/backlinks';
 
 interface BacklinksPanelProps {
   currentFilePath: string | null;
@@ -9,6 +10,7 @@ interface BacklinksPanelProps {
   fileContents: Map<string, string>;
   onBacklinkClick: (path: string, line?: number) => void;
   onClose: () => void;
+  onLinkMention?: (sourcePath: string, lineNumber: number, mention: string) => Promise<void>;
 }
 
 // Helper component for highlighting mention in context (Obsidian-style)
@@ -34,6 +36,7 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
   const [searchQuery, setSearchQuery] = createSignal('');
   const [linkedCollapsed, setLinkedCollapsed] = createSignal(false);
   const [unlinkedCollapsed, setUnlinkedCollapsed] = createSignal(false);
+  const [linkingMention, setLinkingMention] = createSignal<string | null>(null);
 
   // Compute backlinks for current file
   const backlinks = createMemo((): BacklinksData => {
@@ -47,6 +50,52 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
       props.fileContents
     );
   });
+
+  // Convert an unlinked mention to a wikilink
+  const handleLinkMention = async (backlink: BacklinkInfo) => {
+    if (!props.currentFileName) return;
+    
+    const key = `${backlink.sourcePath}:${backlink.lineNumber}`;
+    setLinkingMention(key);
+    
+    try {
+      // Read the source file
+      const content = await invoke<string>('read_file', { path: backlink.sourcePath });
+      const lines = content.split('\n');
+      const lineIndex = backlink.lineNumber - 1;
+      
+      if (lineIndex >= 0 && lineIndex < lines.length) {
+        const line = lines[lineIndex];
+        
+        // Find the mention in the line (case-insensitive)
+        const lowerLine = line.toLowerCase();
+        const lowerTarget = props.currentFileName.toLowerCase();
+        const idx = lowerLine.indexOf(lowerTarget);
+        
+        if (idx !== -1) {
+          // Get the actual text (preserving original case)
+          const actualMention = line.substring(idx, idx + props.currentFileName.length);
+          
+          // Replace with wikilink
+          const newLine = line.substring(0, idx) + `[[${actualMention}]]` + line.substring(idx + actualMention.length);
+          lines[lineIndex] = newLine;
+          
+          // Write the file back
+          const newContent = lines.join('\n');
+          await invoke('write_file', { path: backlink.sourcePath, content: newContent });
+          
+          // Update fileContents to reflect the change (will trigger re-render)
+          if (props.onLinkMention) {
+            await props.onLinkMention(backlink.sourcePath, backlink.lineNumber, actualMention);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to link mention:', err);
+    } finally {
+      setLinkingMention(null);
+    }
+  };
 
   // Filter by search query
   const filteredBacklinks = createMemo(() => {
@@ -141,19 +190,44 @@ const BacklinksPanel: Component<BacklinksPanelProps> = (props) => {
                 fallback={<div class="backlinks-empty-section">No unlinked mentions</div>}
               >
                 <For each={filteredBacklinks().unlinked}>
-                  {(backlink) => (
-                    <div
-                      class="backlinks-item"
-                      onClick={() => props.onBacklinkClick(backlink.sourcePath, backlink.lineNumber)}
-                    >
-                      <span class="backlinks-item-name">{backlink.sourceName}</span>
-                      <HighlightedContext
-                        text={backlink.context}
-                        start={backlink.mentionStart}
-                        end={backlink.mentionEnd}
-                      />
-                    </div>
-                  )}
+                  {(backlink) => {
+                    const key = `${backlink.sourcePath}:${backlink.lineNumber}`;
+                    const isLinking = () => linkingMention() === key;
+                    
+                    return (
+                      <div class="backlinks-item unlinked">
+                        <div 
+                          class="backlinks-item-content"
+                          onClick={() => props.onBacklinkClick(backlink.sourcePath, backlink.lineNumber)}
+                        >
+                          <span class="backlinks-item-name">{backlink.sourceName}</span>
+                          <HighlightedContext
+                            text={backlink.context}
+                            start={backlink.mentionStart}
+                            end={backlink.mentionEnd}
+                          />
+                        </div>
+                        <button
+                          class="backlinks-link-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleLinkMention(backlink);
+                          }}
+                          disabled={isLinking()}
+                          title="Convert to wikilink"
+                        >
+                          {isLinking() ? (
+                            <span class="spinner-small"></span>
+                          ) : (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  }}
                 </For>
               </Show>
             </Show>
