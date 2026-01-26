@@ -232,6 +232,9 @@ const App: Component = () => {
     const hoverColor = `#${(0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1)}`;
     root.style.setProperty('--accent-hover', hoverColor);
     root.style.setProperty('--accent-muted', `${accent}26`);
+    // Calculate contrasting text color for accent backgrounds
+    const luminance = (0.299 * ((num >> 16) & 0xFF) + 0.587 * ((num >> 8) & 0xFF) + 0.114 * (num & 0xFF)) / 255;
+    root.style.setProperty('--accent-text', luminance > 0.5 ? '#000000' : '#ffffff');
 
     // Apply font size
     const fontSize = localStorage.getItem('interface_font_size') || 'medium';

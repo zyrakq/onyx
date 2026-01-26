@@ -7,6 +7,7 @@
   --accent: #8b5cf6;
   --accent-hover: #a78bfa;
   --accent-muted: rgba(139, 92, 246, 0.15);
+  --accent-text: #ffffff;
   --border: #3a3a3f;
   --sidebar-width: 260px;
   --danger: #ef4444;
@@ -238,7 +239,7 @@ body {
 
 .file-tree-item.active {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .file-tree-item.folder {
@@ -252,7 +253,7 @@ body {
 
 .file-tree-item.drop-target {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border-radius: 4px;
 }
 
@@ -690,13 +691,13 @@ body {
 .toolbar-btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .toolbar-btn.opencode-btn {
   background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .toolbar-btn.opencode-btn:hover {
@@ -1042,7 +1043,7 @@ body {
 .graph-mode-btn.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .graph-mode-btn:hover:not(.active):not(:disabled) {
@@ -1130,7 +1131,7 @@ body {
   margin-top: 24px;
   padding: 12px 24px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border: none;
   border-radius: 8px;
   font-size: 14px;
@@ -1141,6 +1142,7 @@ body {
 
 .welcome-create-btn:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .welcome-create-btn svg {
@@ -1168,7 +1170,7 @@ body {
   margin-top: 24px;
   padding: 12px 24px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border: none;
   border-radius: 4px;
   font-size: 14px;
@@ -1177,6 +1179,7 @@ body {
 
 .open-vault-btn:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 /* Modal Overlay */
@@ -1477,7 +1480,7 @@ body {
 
 .search-result-file:hover {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .search-result-match {
@@ -1547,11 +1550,12 @@ body {
 .terminal-btn.opencode-btn {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .terminal-btn.opencode-btn:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .terminal-btn:disabled {
@@ -1680,7 +1684,7 @@ body {
   gap: 8px;
   padding: 12px 24px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border: none;
   border-radius: 8px;
   font-size: 14px;
@@ -1691,6 +1695,7 @@ body {
 
 .opencode-install-btn:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .opencode-install-btn:active {
@@ -2130,7 +2135,7 @@ body {
 }
 
 .chat-message.user .chat-message-avatar svg {
-  color: white;
+  color: var(--accent-text);
 }
 
 .chat-message.assistant .chat-message-avatar {
@@ -2171,7 +2176,7 @@ body {
 
 .chat-message.user .chat-message-text {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border-bottom-right-radius: 4px;
 }
 
@@ -2598,7 +2603,7 @@ body {
   margin-top: 16px;
   padding: 10px 20px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border: none;
   border-radius: 8px;
   font-weight: 500;
@@ -2689,7 +2694,7 @@ body {
 
 .chat-permission-btn.always {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .chat-permission-btn.deny {
@@ -2865,11 +2870,12 @@ body {
 
 .chat-send-btn {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .chat-send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .chat-send-btn:disabled {
@@ -3012,7 +3018,7 @@ body {
 
 .outline-item.active .outline-marker {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .outline-text {
@@ -3205,7 +3211,7 @@ body {
 .backlinks-link-btn:hover {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .backlinks-link-btn:disabled {
@@ -3428,7 +3434,7 @@ body {
   background: var(--accent);
   border: none;
   border-radius: 4px;
-  color: white;
+  color: var(--accent-text);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -3437,6 +3443,7 @@ body {
 
 .property-add-btn:hover:not(:disabled) {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 .property-add-btn:disabled {
@@ -3940,7 +3947,7 @@ body {
   background: var(--accent);
   border: none;
   border-radius: 6px;
-  color: white;
+  color: var(--accent-text);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -3949,6 +3956,7 @@ body {
 
 .setting-button:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
 }
 
 /* Toggle Switch */
@@ -3998,7 +4006,7 @@ body {
 
 .setting-toggle input:checked + .toggle-slider:before {
   transform: translateX(20px);
-  background: white;
+  background: var(--accent-text);
 }
 
 .setting-toggle input:disabled + .toggle-slider {
@@ -4276,7 +4284,7 @@ body {
 
 .skill-item.enabled .skill-icon {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .skill-info {
@@ -4517,7 +4525,7 @@ body {
 
 .skills-tab.active {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .skills-tab svg {
@@ -5023,7 +5031,7 @@ body {
 
 .login-tab.active {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .login-tab svg {
@@ -5605,7 +5613,7 @@ body {
 
 .link-autocomplete-option.selected .heading-level {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .link-autocomplete-option .block-id {
@@ -5701,7 +5709,7 @@ body {
 
 .slash-command-option.selected .slash-command-icon {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .slash-command-content {
@@ -6158,7 +6166,7 @@ body {
 
 .notifications-badge {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 600;
   padding: 2px 6px;
@@ -7041,7 +7049,7 @@ body {
   padding: 10px 20px;
   margin-top: 12px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   border: none;
   border-radius: 8px;
   font-size: 14px;
@@ -7053,6 +7061,7 @@ body {
 
 .file-info-sync-btn:hover {
   background: var(--accent-hover);
+  color: var(--accent-text);
   transform: translateY(-1px);
 }
 
@@ -7628,7 +7637,7 @@ body {
   height: 16px;
   padding: 0 4px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   font-size: 10px;
   font-weight: 600;
   border-radius: 8px;
@@ -7693,7 +7702,7 @@ body {
   height: 18px;
   padding: 0 5px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   font-size: 10px;
   font-weight: 600;
   border-radius: 9px;

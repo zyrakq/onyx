@@ -303,6 +303,9 @@ const Settings: Component<SettingsProps> = (props) => {
     root.style.setProperty('--accent-hover', hoverColor);
     // Calculate muted color (with alpha)
     root.style.setProperty('--accent-muted', `${accent}26`); // 15% opacity
+    // Calculate contrasting text color for accent backgrounds
+    const contrastColor = getContrastColor(accent);
+    root.style.setProperty('--accent-text', contrastColor);
 
     // Apply font size
     root.setAttribute('data-font-size', interfaceFontSize());
@@ -319,6 +322,18 @@ const Settings: Component<SettingsProps> = (props) => {
     const G = Math.min(255, ((num >> 8) & 0x00FF) + amt);
     const B = Math.min(255, (num & 0x0000FF) + amt);
     return `#${(0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1)}`;
+  };
+
+  // Helper to calculate relative luminance and determine contrast color
+  const getContrastColor = (hex: string): string => {
+    const num = parseInt(hex.replace('#', ''), 16);
+    const R = (num >> 16) & 0xFF;
+    const G = (num >> 8) & 0xFF;
+    const B = num & 0xFF;
+    // Calculate relative luminance using sRGB formula
+    const luminance = (0.299 * R + 0.587 * G + 0.114 * B) / 255;
+    // Return black for light colors, white for dark colors
+    return luminance > 0.5 ? '#000000' : '#ffffff';
   };
 
   // Load saved login on mount
