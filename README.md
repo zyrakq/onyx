@@ -5,7 +5,6 @@ A private, encrypted note-taking app with Nostr sync.
 Onyx lets you write markdown notes locally and sync them securely across devices using the Nostr protocol. Your notes are encrypted with your Nostr keys before being published to relays, ensuring only you can read them.
 
 ![Onyx Editor](images/editor.png)
-![Productivity Settings](images/productivity-settings.png)
 
 ## Features
 
@@ -16,6 +15,15 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 - **Secure Storage** - Private keys stored in your OS keyring (Keychain, libsecret, Credential Manager)
 - **Cross-Platform** - Linux, macOS, and Windows
 
+### AI Assistant & Skills
+- **Integrated AI Assistant** - Context-aware chatbot for writing, editing, and research (`Ctrl+\``)
+- **Skills System** - Extensible capabilities including document creation, research, and more
+- **File Context** - AI can read and understand your current note for better assistance
+- **Smart Suggestions** - Get help with writing, formatting, and organizing your notes
+
+![AI Chatbot Interface](images/ai-chatbot-interface.png)
+![Main Editor with AI Assistant](images/main-editor-with-ai.png)
+
 ### Productivity Tools
 - **Daily Notes** - Quickly create/open today's daily note with `Ctrl+D`
 - **Templates** - Create notes from templates with `Ctrl+T`
@@ -24,6 +32,8 @@ Onyx lets you write markdown notes locally and sync them securely across devices
 - **Outline Panel** - Navigate document headings (`Ctrl+Shift+O`)
 - **Backlinks Panel** - See which notes link to the current note (`Ctrl+Shift+B`)
 - **Link Unlinked Mentions** - Convert text mentions to `[[wikilinks]]` with one click
+
+![Productivity Settings](images/productivity-settings.png)
 
 ### Document Sharing
 - **Share with Nostr Users** - Send encrypted documents to any Nostr user via npub, NIP-05, or hex pubkey
@@ -133,13 +143,6 @@ npm run tauri build
 ![Nostr Sync Settings](images/nostr-sync.png)
 
 Your notes are encrypted with NIP-44 before being published to relays. Only you can decrypt them with your private key.
-
-### AI Assistant
-
-The app includes an integrated AI chatbot for assistance with writing and editing.
-
-![AI Chatbot Interface](images/ai-chatbot-interface.png)
-![Main Editor with AI Assistant](images/main-editor-with-ai.png)
 
 ### Sharing Documents
 
