@@ -31,7 +31,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["onyx"]
+        "schemes": [
+          "onyx"
+        ]
       }
     }
   },
@@ -53,7 +55,7 @@
         "desktopTemplate": "desktop/onyx.desktop"
       },
       "appimage": {
-        "bundleMediaFramework": false
+        "bundleMediaFramework": true
       }
     }
   }

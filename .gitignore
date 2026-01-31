@@ -23,3 +23,12 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+
+# Arch Linux package build
+onyx-git/
+pkg/
+src/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.pkg.tar.gz
+*.src.tar.gz
